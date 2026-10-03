@@ -19,6 +19,91 @@ void convert_init(convert_t *c, mpeg1_t *dec, uint8_t *ring, uint8_t *lines,
   c->lines = lines;
   c->work = work;
   c->out = *out;
+  c->keep_percent = -1;
+}
+
+// The index lines, relabelled to the slots when the dithered palette's
+// entries are not in them.
+static void out_lines(void *ctx, int line, const uint8_t *indices,
+                      int width) {
+  convert_t *c = (convert_t *)ctx;
+  if (!c->remap) {
+    c->out.lines(c->out.ctx, line, indices, width);
+    return;
+  }
+  for (int i = 0; i < 2 * width; i++) {
+    c->line_pair[i] = c->map[indices[i]];
+  }
+  c->out.lines(c->out.ctx, line, c->line_pair, width);
+}
+
+static int distance(uint16_t a, uint16_t b) {
+  int d = 0;
+  for (int shift = 0; shift <= 8; shift += 4) {
+    int e = (int)((a >> shift) & 15u) - (int)((b >> shift) & 15u);
+    d += e * e;
+  }
+  return d;
+}
+
+// The picture's own palette into use: each entry, nearest pairs first, to
+// the slot of the colour shown nearest to it.
+static void take_slots(convert_t *c) {
+  const picture16_palette_t *own = &c->palette;
+  bool entry_done[16] = {false};
+  bool slot_done[16] = {false};
+  for (int k = 0; k < own->colours; k++) {
+    int best_e = 0;
+    int best_s = 0;
+    int best_d = 1 << 30;
+    for (int e = 0; e < own->colours; e++) {
+      for (int s = 0; s < 16 && !entry_done[e]; s++) {
+        int d = slot_done[s] ? best_d
+                             : distance(own->rgb444[e], c->shown.rgb444[s]);
+        if (d < best_d) {
+          best_d = d;
+          best_e = e;
+          best_s = s;
+        }
+      }
+    }
+    entry_done[best_e] = true;
+    slot_done[best_s] = true;
+    c->map[best_e] = (uint8_t)best_s;
+    c->shown.rgb444[best_s] = own->rgb444[best_e];
+  }
+  c->in_use = *own;
+  c->remap = false;
+  for (int e = 0; e < own->colours; e++) {
+    c->remap |= c->map[e] != e;
+  }
+}
+
+// The palette to dither with: the one shown, or the picture's own.
+static const picture16_palette_t *stable_palette(convert_t *c) {
+  if (c->keep_percent < 0) {
+    c->remap = false;
+    return &c->palette;
+  }
+  if (c->pictures == 0) {
+    memset(&c->shown, 0, sizeof(c->shown));
+    c->shown.colours = 16;
+    for (int e = 0; e < c->palette.colours; e++) {
+      c->shown.rgb444[e] = c->palette.rgb444[e];
+      c->map[e] = (uint8_t)e;
+    }
+    c->in_use = c->palette;
+    c->remap = false;
+    return &c->in_use;
+  }
+  uint64_t own = picture16_passes_error(&c->passes, &c->palette);
+  uint64_t in_use = picture16_passes_error(&c->passes, &c->in_use);
+  if (in_use * 100u <= own * (uint64_t)(100 + c->keep_percent)) {
+    c->kept++;
+    return &c->in_use;
+  }
+  take_slots(c);
+  return &c->in_use;
 }
 
 // The decoder's rows, as they come out: the first pass.
@@ -60,8 +145,8 @@ int convert_next(convert_t *c) {
     if (decoded == 0) {
       continue;  // a P picture the frame store cannot follow: not shown
     }
-    picture16_passes_palette(&c->passes, &c->palette, c->out.lines,
-                             c->out.ctx);
+    picture16_passes_choose(&c->passes, &c->palette);
+    picture16_passes_dither(&c->passes, stable_palette(c), out_lines, c);
     for (int row = 0; row < dec->mb_rows; row++) {
       const uint8_t *y;
       const uint8_t *cb;
@@ -76,7 +161,8 @@ int convert_next(convert_t *c) {
             ? 0
             : cadence_first_frame(dec->display_index, c->num, c->den);
     c->pictures++;
-    c->out.picture(c->out.ctx, &c->palette, first);
+    c->out.picture(c->out.ctx, c->keep_percent < 0 ? &c->palette : &c->shown,
+                   first);
     return decoded;
   }
 }

@@ -10,6 +10,18 @@
  * the second reads the picture back from the frame store before the next
  * picture's decode starts. No scaled picture is kept.
  *
+ * Palette stability (keep_percent >= 0), so that what did not move costs
+ * nothing from one frame to the next: a picture is dithered with the
+ * palette in use before it when that palette's error on the picture is
+ * within keep_percent of the picture's own palette's (a still or slowly
+ * changing scene keeps its palette, and an ordered dither then gives a
+ * still area the same indices); otherwise with its own palette, whose
+ * entries take the slots of the nearest colours shown before. A cut gets
+ * its own palette. The palette in use keeps the entry order of the picture
+ * that chose it (the dither then repeats itself on what did not change),
+ * each entry mapped to its slot; the slots it does not use keep their
+ * colours, unused.
+ *
  * Plain C, integers only, no allocation: the cartridge and the PC tool
  * convert a clip to the same bytes.
  */
@@ -17,6 +29,7 @@
 #ifndef CONVERT_H
 #define CONVERT_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "mpeg1_video.h"
@@ -33,7 +46,8 @@ typedef struct {
   picture16_lines_fn lines;
   // After its lines: the picture is shown from output frame `first_frame`
   // until the next picture's first frame (or the clip's length). Its type
-  // and display position are in the decoder.
+  // and display position are in the decoder. With palette stability the
+  // palette has all 16 slots.
   void (*picture)(void *ctx, const picture16_palette_t *palette,
                   uint32_t first_frame);
   void *ctx;
@@ -52,7 +66,16 @@ typedef struct {
   uint32_t den;
   uint32_t last_display;  // the last display position seen so far
   uint32_t pictures;      // pictures converted
-  picture16_palette_t palette;
+  picture16_palette_t palette;  // the picture's own
+  // Palette stability: -1 (convert_init's) off, each picture with its own
+  // palette in its own order, as picture16_convert() gives it.
+  int keep_percent;
+  picture16_palette_t shown;   // the 16 slots, as shown
+  picture16_palette_t in_use;  // the palette dithered to, in its order
+  uint8_t map[16];             // in_use's entry -> its slot
+  bool remap;                 // map is not the identity
+  uint32_t kept;              // pictures dithered with the palette in use
+  uint8_t line_pair[2 * 320];
 } convert_t;
 
 // The decoder `dec` has its frame store (mpeg1_set_slots()). `ring`,

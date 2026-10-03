@@ -198,10 +198,21 @@ void picture16_passes_mb_row(picture16_passes_t *p, int mb_row,
                              const uint8_t *y, const uint8_t *cb,
                              const uint8_t *cr, int stride);
 
-// Ends the first pass: chooses the palette, then starts the second, whose
-// index lines go to `lines_fn`.
-void picture16_passes_palette(picture16_passes_t *p,
-                              picture16_palette_t *palette,
-                              picture16_lines_fn lines_fn, void *lines_ctx);
+// Ends the first pass: the picture's own palette, chosen from its histogram.
+void picture16_passes_choose(picture16_passes_t *p,
+                             picture16_palette_t *palette);
+
+// After picture16_passes_choose(), before picture16_passes_dither(): how far
+// `palette` is from the picture's colours. Each colour of the histogram, as
+// the palette choice counts it, to its nearest entry: the squared 8-bit
+// distances summed. To compare two palettes on one picture.
+uint64_t picture16_passes_error(const picture16_passes_t *p,
+                                const picture16_palette_t *palette);
+
+// Starts the second pass, dithering to `palette` (the picture's own, or
+// another among the target's colours); its index lines go to `lines_fn`.
+void picture16_passes_dither(picture16_passes_t *p,
+                             const picture16_palette_t *palette,
+                             picture16_lines_fn lines_fn, void *lines_ctx);
 
 #endif  // PICTURE16_H

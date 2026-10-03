@@ -1334,9 +1334,8 @@ void picture16_passes_mb_row(picture16_passes_t *p, int mb_row,
   picture16_scaler_mb_row(&p->scaler, mb_row, y, cb, cr, stride);
 }
 
-void picture16_passes_palette(picture16_passes_t *p,
-                              picture16_palette_t *palette,
-                              picture16_lines_fn lines_fn, void *lines_ctx) {
+void picture16_passes_choose(picture16_passes_t *p,
+                             picture16_palette_t *palette) {
   const picture16_options_t *o = &p->options;
   int gun_bits = (o->gun_bits == 3) ? 3 : 4;
   uint16_t *hist = (uint16_t *)p->work;
@@ -1358,8 +1357,35 @@ void picture16_passes_palette(picture16_passes_t *p,
   if (p->profile != NULL) {
     p->profile->palette = since(p->profile, t0);
   }
+}
+
+uint64_t picture16_passes_error(const picture16_passes_t *p,
+                                const picture16_palette_t *palette) {
+  int gun_bits = (p->options.gun_bits == 3) ? 3 : 4;
+  int pal8[MAX_COLOURS][3] = {{0, 0, 0}};
+  int n = palette->colours > 0 ? palette->colours : 1;
+  palette_8bit(palette, gun_bits, pal8);
+  const uint16_t *hist = (const uint16_t *)p->work;
+  uint64_t error = 0;
+  for (int bin = 0; bin < BINS; bin++) {
+    if (hist[bin] == 0) {
+      continue;
+    }
+    int r = bin8(bin >> 8), g = bin8((bin >> 4) & 15), b = bin8(bin & 15);
+    int e = nearest(pal8, n, r, g, b);
+    int dr = r - pal8[e][0], dg = g - pal8[e][1], db = b - pal8[e][2];
+    error += (uint64_t)hist[bin] * (uint32_t)(dr * dr + dg * dg + db * db);
+  }
+  return error;
+}
+
+void picture16_passes_dither(picture16_passes_t *p,
+                             const picture16_palette_t *palette,
+                             picture16_lines_fn lines_fn, void *lines_ctx) {
+  const picture16_options_t *o = &p->options;
+  int gun_bits = (o->gun_bits == 3) ? 3 : 4;
   // The histogram is no longer needed: its memory holds the table.
-  t0 = now(p->profile);
+  uint32_t t0 = now(p->profile);
   if (o->dither == PICTURE16_DITHER_MIX) {
     build_mix(palette, gun_bits, (uint8_t *)p->work,
               (mix_t *)((uint8_t *)p->work + BINS));

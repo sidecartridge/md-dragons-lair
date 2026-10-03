@@ -19,13 +19,17 @@
 //   dlconv cadence CLIP.MPG [-v]      the clip at 25 frames a second: its
 //                                     length, and the frames each I and P
 //                                     picture covers (-v: one line each)
-//   dlconv convert CLIP.MPG [--st] [-v] [OUT.rgb]
+//   dlconv convert CLIP.MPG [--st] [--keep N] [-v] [OUT.rgb]
 //                                     the clip as the cartridge converts it
 //                                     (convert.h; --st: 512 colours, else
-//                                     4,096): each picture's CRC-32 (-v) and
-//                                     the clip's; OUT.rgb its frames at 25 a
-//                                     second, 320x200 RGB, for ffmpeg -f
-//                                     rawvideo -pix_fmt rgb24 -s 320x200 -r 25
+//                                     4,096; --keep N: palette stability,
+//                                     N %): each picture's CRC-32 (-v) and
+//                                     the clip's, the indices and the
+//                                     palette slots that change from one
+//                                     picture to the next; OUT.rgb its
+//                                     frames at 25 a second, 320x200 RGB,
+//                                     for ffmpeg -f rawvideo -pix_fmt rgb24
+//                                     -s 320x200 -r 25
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -295,6 +299,14 @@ static int cadence(const char *clip, bool verbose) {
 // The converted pictures: CRCs, and the frames into OUT.
 typedef struct {
   uint8_t indices[320 * 200];
+  uint8_t previous[320 * 200];  // the indices of the picture before
+  uint16_t previous_palette[16];
+  uint64_t changed_indices;     // summed over the pictures after the first
+  uint64_t changed_groups;      // 16-pixel groups of a line (an ST word)
+  uint32_t changed_slots;
+  uint32_t still_pictures;      // no index changed
+  uint32_t kept_before;
+  const convert_t *conv;
   uint8_t rgb[320 * 200 * 3];  // the picture shown, from `shown_from`
   FILE *out;
   int bits;
@@ -326,11 +338,32 @@ static void conv_picture(void *ctx, const picture16_palette_t *palette,
   uint32_t crc = crc32_update(0, k->indices, sizeof(k->indices));
   crc = crc32_update(crc, palette->rgb444, sizeof(palette->rgb444));
   k->clip_crc = crc32_update(k->clip_crc, &crc, sizeof(crc));
+  uint32_t changed = 0;
+  int slots = 0;
+  if (k->have) {
+    for (int i = 0; i < 320 * 200; i++) {
+      changed += k->indices[i] != k->previous[i];
+    }
+    for (int g = 0; g < 320 * 200; g += 16) {
+      k->changed_groups +=
+          memcmp(&k->indices[g], &k->previous[g], 16) != 0;
+    }
+    for (int e = 0; e < 16; e++) {
+      slots += palette->rgb444[e] != k->previous_palette[e];
+    }
+    k->changed_indices += changed;
+    k->changed_slots += (uint32_t)slots;
+    k->still_pictures += changed == 0;
+  }
+  bool kept = k->conv->kept != k->kept_before;
+  k->kept_before = k->conv->kept;
+  memcpy(k->previous, k->indices, sizeof(k->previous));
+  memcpy(k->previous_palette, palette->rgb444, sizeof(k->previous_palette));
   if (k->verbose) {
-    printf("%c %5u  frame %5u  %08X\n",
+    printf("%c %5u  frame %5u  %08X  %s %5u indices, %2d slots changed\n",
            k->dec->picture_type == MPEG1_PICTURE_I ? 'I' : 'P',
            (unsigned)k->dec->display_index, (unsigned)first_frame,
-           (unsigned)crc);
+           (unsigned)crc, kept ? "kept" : "own ", (unsigned)changed, slots);
   }
   if (k->have) {
     conv_write(k, first_frame);
@@ -353,9 +386,12 @@ static int convert_clip(int argc, char **argv) {
   const char *out_path = NULL;
   static conv_sink_t sink;
   sink.bits = 4;
+  int keep = -1;
   for (int a = 3; a < argc; a++) {
     if (strcmp(argv[a], "--st") == 0) {
       sink.bits = 3;
+    } else if (strcmp(argv[a], "--keep") == 0 && a + 1 < argc) {
+      keep = atoi(argv[++a]);
     } else if (strcmp(argv[a], "-v") == 0) {
       sink.verbose = true;
     } else {
@@ -387,6 +423,8 @@ static int convert_clip(int argc, char **argv) {
   convert_out_t out = {conv_lines, conv_picture, &sink};
   static convert_t c;
   convert_init(&c, &cdec, ring, lines, work, &options, &out);
+  c.keep_percent = keep;
+  sink.conv = &c;
   int counts[3] = {0};
   int type;
   while ((type = convert_next(&c)) > 0) {
@@ -399,6 +437,16 @@ static int convert_clip(int argc, char **argv) {
          (unsigned)c.pictures, counts[1], counts[2],
          sink.bits == 4 ? "an STE" : "an ST", (unsigned)length,
          (unsigned)sink.clip_crc, type);
+  if (c.pictures > 1) {
+    uint32_t after = c.pictures - 1;
+    printf("palette kept on %u of %u pictures; per picture after the first: "
+           "%.1f%% of the indices changed, %.1f%% of the 16-pixel groups, "
+           "%.2f slots; %u pictures with no index changed\n",
+           (unsigned)c.kept, (unsigned)after,
+           100.0 * (double)sink.changed_indices / ((double)after * 64000.0),
+           100.0 * (double)sink.changed_groups / ((double)after * 4000.0),
+           (double)sink.changed_slots / after, (unsigned)sink.still_pictures);
+  }
   if (sink.out != NULL) {
     fclose(sink.out);
   }

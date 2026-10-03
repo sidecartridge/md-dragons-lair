@@ -230,7 +230,8 @@ static void check_two_pass(const char *what) {
           CHECK(picture16_passes_init(&p, SRC_W, SRC_H, ring, lines, work,
                                       &o2, NULL));
           feed(&p);
-          picture16_passes_palette(&p, &p2, take_lines, NULL);
+          picture16_passes_choose(&p, &p2);
+          picture16_passes_dither(&p, &p2, take_lines, NULL);
           feed(&p);
           int diff = count_diff(one, two_pass_out, sizeof(one));
           diffs += diff != 0;

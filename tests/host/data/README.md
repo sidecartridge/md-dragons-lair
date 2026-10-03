@@ -1,7 +1,7 @@
 # Host test data
 
-Synthetic streams for `test_mp2_audio.c` and `test_cadence.c`, made with ffmpeg 8.1 (sine tones
-and a test pattern; nothing from the game). From this folder:
+Synthetic streams for `test_mp2_audio.c`, `test_cadence.c` and `test_convert.c`, made with ffmpeg
+8.1 (sine tones and test patterns; nothing from the game). From this folder:
 
 ```sh
 # 1 kHz left, 3 kHz right, each at half of full scale, 0.5 s, MP2 in an MPEG-1 program stream
@@ -25,12 +25,20 @@ The references are another decoder's reading of the same streams, so the test ch
 firmware's decoder, not the encoder (ffmpeg's encoder leaves its own artifacts on loud pure
 tones: they are in both).
 
-A video clip with B pictures and open groups for `test_cadence.c`, at the game's size and picture
-rate, and the order ffprobe shows its pictures in:
+A video clip with B pictures and open groups for `test_cadence.c` and `test_convert.c`, at the
+game's size and picture rate, and the order ffprobe shows its pictures in:
 
 ```sh
 ffmpeg -f lavfi -i "testsrc=size=352x240:rate=30000/1001:duration=2" \
        -c:v mpeg1video -bf 2 -g 15 -q:v 20 -f mpeg ibp_352x240.mpg
 ffprobe -v error -select_streams v:0 -show_frames -show_entries frame=pict_type -of csv=p=0 \
         ibp_352x240.mpg | cut -c1 | tr -d '\n' > ibp_352x240.types
+```
+
+A still clip for `test_convert.c` (one group, so every picture after the first P picture is the
+same):
+
+```sh
+ffmpeg -f lavfi -i "smptebars=size=352x240:rate=30000/1001:duration=1" \
+       -c:v mpeg1video -bf 2 -g 30 -q:v 8 -f mpeg still_352x240.mpg
 ```
