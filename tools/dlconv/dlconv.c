@@ -42,10 +42,12 @@
 //                                     every picture stored whole as the
 //                                     cartridge does (--deltas: against the
 //                                     picture before)
-//   dlconv play FILE.DLC [OUT.rgb]    a clip file read back: checked (CRC-32,
+//   dlconv play FILE.DLC [OUT.rgb [OUT.s8]]
+//                                     a clip file read back: checked (CRC-32,
 //                                     records, index), the decode timed, its
 //                                     frames as raw RGB as convert writes
-//                                     them
+//                                     them, its sound as signed 8-bit mono
+//                                     at 22,050 Hz
 
 // clock_gettime() for the decode timing.
 #define _POSIX_C_SOURCE 200809L
@@ -717,10 +719,13 @@ static uint32_t now_us(void) {
   return (uint32_t)(t.tv_sec * 1000000 + t.tv_nsec / 1000);
 }
 
-static int play_clip(const char *path, const char *out_path) {
+static int play_clip(const char *path, const char *out_path,
+                     const char *sound_path) {
   FILE *f = fopen(path, "rb");
   FILE *out = out_path != NULL ? fopen(out_path, "wb") : NULL;
-  if (f == NULL || (out_path != NULL && out == NULL)) {
+  FILE *sound = sound_path != NULL ? fopen(sound_path, "wb") : NULL;
+  if (f == NULL || (out_path != NULL && out == NULL) ||
+      (sound_path != NULL && sound == NULL)) {
     perror("dlconv");
     return 1;
   }
@@ -806,6 +811,9 @@ static int play_clip(const char *path, const char *out_path) {
       clip_crc = crc32_update(clip_crc, &crc, sizeof(crc));
     }
     at += (uint32_t)n;
+    if (sound != NULL) {
+      fwrite(rec.sound, 1, CLIP_SAMPLES, sound);
+    }
     if (out != NULL) {
       for (int i = 0; i < CLIP_WIDTH * CLIP_HEIGHT; i++) {
         uint16_t c = palette[pixels[i]];
@@ -838,6 +846,9 @@ static int play_clip(const char *path, const char *out_path) {
   if (out != NULL) {
     fclose(out);
   }
+  if (sound != NULL) {
+    fclose(sound);
+  }
   free(file);
   return errors ? 1 : 0;
 }
@@ -855,8 +866,9 @@ int main(int argc, char **argv) {
   if (argc >= 4 && strcmp(argv[1], "encode") == 0) {
     return encode_clip(argc, argv);
   }
-  if ((argc == 3 || argc == 4) && strcmp(argv[1], "play") == 0) {
-    return play_clip(argv[2], argc == 4 ? argv[3] : NULL);
+  if (argc >= 3 && argc <= 5 && strcmp(argv[1], "play") == 0) {
+    return play_clip(argv[2], argc >= 4 ? argv[3] : NULL,
+                     argc == 5 ? argv[4] : NULL);
   }
   if ((argc == 3 || (argc == 4 && strcmp(argv[3], "-v") == 0)) &&
       strcmp(argv[1], "cadence") == 0) {
@@ -879,7 +891,7 @@ int main(int argc, char **argv) {
             "[--dump FILE] [-v] [OUT.rgb]\n"
             "       dlconv encode CLIP.MPG OUT.DLC [--st] [--keep N] "
             "[--deltas]\n"
-            "       dlconv play FILE.DLC [OUT.rgb]\n");
+            "       dlconv play FILE.DLC [OUT.rgb [OUT.s8]]\n");
     return 2;
   }
   FILE *in = fopen(argv[2], "rb");
