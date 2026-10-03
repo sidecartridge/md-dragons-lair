@@ -23,10 +23,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "aconfig.h"
 #include "ikbd.h"
 
-// The app's folder on the SD card, created at boot when it is missing.
-#define BENCH_FOLDER "/DLAIR"
+#define BENCH_FOLDER APP_FOLDER
 
 // The image's usual name; any ISO in the folder whose root holds S01.MPG
 // is taken when this one is not there.
