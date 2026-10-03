@@ -191,4 +191,10 @@ int mpeg1_decode_picture(mpeg1_t *m, mpeg1_row_fn row, void *ctx);
 // Skips the rest of the current picture without decoding it.
 void mpeg1_skip_picture(mpeg1_t *m);
 
+// With a frame store, after a picture was decoded: its macroblock row
+// `mb_row` as the row callback had it (the stride is m->stride), until the
+// next picture's decode starts. False without a reference.
+bool mpeg1_reference_row(const mpeg1_t *m, int mb_row, const uint8_t **y,
+                         const uint8_t **cb, const uint8_t **cr);
+
 #endif  // MPEG1_VIDEO_H

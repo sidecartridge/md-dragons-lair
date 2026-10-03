@@ -19,6 +19,13 @@
 //   dlconv cadence CLIP.MPG [-v]      the clip at 25 frames a second: its
 //                                     length, and the frames each I and P
 //                                     picture covers (-v: one line each)
+//   dlconv convert CLIP.MPG [--st] [-v] [OUT.rgb]
+//                                     the clip as the cartridge converts it
+//                                     (convert.h; --st: 512 colours, else
+//                                     4,096): each picture's CRC-32 (-v) and
+//                                     the clip's; OUT.rgb its frames at 25 a
+//                                     second, 320x200 RGB, for ffmpeg -f
+//                                     rawvideo -pix_fmt rgb24 -s 320x200 -r 25
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -26,6 +33,7 @@
 #include <string.h>
 
 #include "cadence.h"
+#include "convert.h"
 #include "crc32.h"
 #include "mp2_audio.h"
 #include "mpeg1_video.h"
@@ -284,12 +292,129 @@ static int cadence(const char *clip, bool verbose) {
   return out_of_order ? 1 : 0;
 }
 
+// The converted pictures: CRCs, and the frames into OUT.
+typedef struct {
+  uint8_t indices[320 * 200];
+  uint8_t rgb[320 * 200 * 3];  // the picture shown, from `shown_from`
+  FILE *out;
+  int bits;
+  bool verbose;
+  const mpeg1_t *dec;
+  bool have;
+  uint32_t shown_from;
+  uint32_t clip_crc;
+  uint32_t frames;  // written
+} conv_sink_t;
+
+static void conv_lines(void *ctx, int line, const uint8_t *indices,
+                       int width) {
+  conv_sink_t *k = (conv_sink_t *)ctx;
+  memcpy(&k->indices[line * width], indices, 2u * (size_t)width);
+}
+
+static void conv_write(conv_sink_t *k, uint32_t until) {
+  for (; k->have && k->shown_from + k->frames < until; k->frames++) {
+    if (k->out != NULL) {
+      fwrite(k->rgb, 1, sizeof(k->rgb), k->out);
+    }
+  }
+}
+
+static void conv_picture(void *ctx, const picture16_palette_t *palette,
+                         uint32_t first_frame) {
+  conv_sink_t *k = (conv_sink_t *)ctx;
+  uint32_t crc = crc32_update(0, k->indices, sizeof(k->indices));
+  crc = crc32_update(crc, palette->rgb444, sizeof(palette->rgb444));
+  k->clip_crc = crc32_update(k->clip_crc, &crc, sizeof(crc));
+  if (k->verbose) {
+    printf("%c %5u  frame %5u  %08X\n",
+           k->dec->picture_type == MPEG1_PICTURE_I ? 'I' : 'P',
+           (unsigned)k->dec->display_index, (unsigned)first_frame,
+           (unsigned)crc);
+  }
+  if (k->have) {
+    conv_write(k, first_frame);
+  }
+  for (int i = 0; i < 320 * 200; i++) {
+    uint16_t c = palette->rgb444[k->indices[i]];
+    for (int g = 0; g < 3; g++) {
+      int gun = (c >> (8 - 4 * g)) & 15;
+      k->rgb[3 * i + g] =
+          (uint8_t)((k->bits == 4) ? gun * 17 : (gun >> 1) * 255 / 7);
+    }
+  }
+  k->have = true;
+  k->shown_from = first_frame;
+  k->frames = 0;
+}
+
+static int convert_clip(int argc, char **argv) {
+  const char *clip = argv[2];
+  const char *out_path = NULL;
+  static conv_sink_t sink;
+  sink.bits = 4;
+  for (int a = 3; a < argc; a++) {
+    if (strcmp(argv[a], "--st") == 0) {
+      sink.bits = 3;
+    } else if (strcmp(argv[a], "-v") == 0) {
+      sink.verbose = true;
+    } else {
+      out_path = argv[a];
+    }
+  }
+  FILE *in = fopen(clip, "rb");
+  sink.out = (out_path != NULL) ? fopen(out_path, "wb") : NULL;
+  if (in == NULL || (out_path != NULL && sink.out == NULL)) {
+    perror("dlconv");
+    return 1;
+  }
+  static mpeg_ps_t cps;
+  static mpeg1_t cdec;
+  static uint8_t store[MPEG1_MAX_SLOTS][MPEG1_SLOT_BYTES];
+  static _Alignas(4) uint8_t ring[PICTURE16_SCALER_BYTES];
+  static _Alignas(4) uint8_t lines[PICTURE16_LINES_BYTES];
+  static uint8_t work[PICTURE16_WORK_BYTES];
+  uint8_t *slots[MPEG1_MAX_SLOTS];
+  for (unsigned i = 0; i < MPEG1_MAX_SLOTS; i++) {
+    slots[i] = store[i];
+  }
+  mpeg_ps_init(&cps, read_file, in);
+  mpeg1_init(&cdec, &cps);
+  mpeg1_set_slots(&cdec, slots, (int)MPEG1_MAX_SLOTS);
+  sink.dec = &cdec;
+  picture16_options_t options = {sink.bits, PICTURE16_WEIGHT_SQRT,
+                                 PICTURE16_DITHER_MIX, NULL, NULL};
+  convert_out_t out = {conv_lines, conv_picture, &sink};
+  static convert_t c;
+  convert_init(&c, &cdec, ring, lines, work, &options, &out);
+  int counts[3] = {0};
+  int type;
+  while ((type = convert_next(&c)) > 0) {
+    counts[type == MPEG1_PICTURE_I ? 1 : 2]++;
+  }
+  uint32_t length = convert_length(&c);
+  conv_write(&sink, length);
+  printf("%u pictures converted (%d I, %d P) for %s, %u frames; clip CRC-32 "
+         "%08X; end %d\n",
+         (unsigned)c.pictures, counts[1], counts[2],
+         sink.bits == 4 ? "an STE" : "an ST", (unsigned)length,
+         (unsigned)sink.clip_crc, type);
+  if (sink.out != NULL) {
+    fclose(sink.out);
+  }
+  fclose(in);
+  return type < 0 ? 1 : 0;
+}
+
 static mpeg_ps_t ps;
 static mpeg1_t dec;
 
 int main(int argc, char **argv) {
   if (argc >= 5 && strcmp(argv[1], "preview") == 0) {
     return preview(argc, argv);
+  }
+  if (argc >= 3 && strcmp(argv[1], "convert") == 0) {
+    return convert_clip(argc, argv);
   }
   if ((argc == 3 || (argc == 4 && strcmp(argv[3], "-v") == 0)) &&
       strcmp(argv[1], "cadence") == 0) {
@@ -307,7 +432,8 @@ int main(int argc, char **argv) {
             "       dlconv ipcrc CLIP.MPG\n"
             "       dlconv preview CLIP.MPG OUT N...\n"
             "       dlconv audio CLIP.MPG [OUT.s16]\n"
-            "       dlconv cadence CLIP.MPG [-v]\n");
+            "       dlconv cadence CLIP.MPG [-v]\n"
+            "       dlconv convert CLIP.MPG [--st] [-v] [OUT.rgb]\n");
     return 2;
   }
   FILE *in = fopen(argv[2], "rb");

@@ -1073,6 +1073,19 @@ int mpeg1_next_picture(mpeg1_t *m) {
   }
 }
 
+bool mpeg1_reference_row(const mpeg1_t *m, int mb_row, const uint8_t **y,
+                         const uint8_t **cb, const uint8_t **cr) {
+  if (!m->have_reference || mb_row < 0 || mb_row >= m->mb_rows ||
+      m->ref_row[mb_row] < 0) {
+    return false;
+  }
+  const uint8_t *base = m->slot[m->ref_row[mb_row]];
+  *y = base;
+  *cb = base + 16 * m->stride;
+  *cr = *cb + 8 * (m->stride / 2);
+  return true;
+}
+
 void mpeg1_skip_picture(mpeg1_t *m) {
   for (;;) {
     int code = next_start_code(m);
