@@ -9,15 +9,21 @@
 
 #include "cadence.h"
 
-void convert_init(convert_t *c, mpeg1_t *dec, uint8_t *ring, uint8_t *lines,
-                  void *work, const picture16_options_t *options,
+// The store's spare rows hold the rest of the passes' memory.
+_Static_assert(PICTURE16_RING_Y_BYTES + PICTURE16_LINES_C_BYTES <=
+                   MPEG1_SLOT_BYTES,
+               "the luma ring and the scaled chroma lines fit a row");
+_Static_assert(PICTURE16_WORK_BYTES <= MPEG1_SLOT_BYTES,
+               "the histogram fits a row");
+
+void convert_init(convert_t *c, mpeg1_t *dec, uint8_t *ring_c,
+                  uint8_t *lines_y, const picture16_options_t *options,
                   const convert_out_t *out) {
   memset(c, 0, sizeof(*c));
   c->dec = dec;
   c->options = *options;
-  c->ring = ring;
-  c->lines = lines;
-  c->work = work;
+  c->ring_c = ring_c;
+  c->lines_y = lines_y;
   c->out = *out;
   c->keep_percent = -1;
 }
@@ -119,11 +125,17 @@ static const picture16_palette_t *stable_palette(convert_t *c) {
   return &c->in_use;
 }
 
-// The decoder's rows, as they come out: the first pass.
-static void first_pass_row(void *ctx, int mb_row, const uint8_t *y,
-                           const uint8_t *cb, const uint8_t *cr, int stride) {
-  convert_t *c = (convert_t *)ctx;
-  picture16_passes_mb_row(&c->passes, mb_row, y, cb, cr, stride);
+// One pass over the decoded picture, from the frame store.
+static void pass_over_store(convert_t *c) {
+  mpeg1_t *dec = c->dec;
+  for (int row = 0; row < dec->mb_rows; row++) {
+    const uint8_t *y;
+    const uint8_t *cb;
+    const uint8_t *cr;
+    if (mpeg1_reference_row(dec, row, &y, &cb, &cr)) {
+      picture16_passes_mb_row(&c->passes, row, y, cb, cr, dec->stride);
+    }
+  }
 }
 
 // Reads up to the next I or P picture's header, the B pictures before it
@@ -168,11 +180,7 @@ int convert_next(convert_t *c) {
         !cadence_picture_rate(dec->picture_rate, &c->num, &c->den)) {
       return CONVERT_ERR_RATE;
     }
-    if (!picture16_passes_init(&c->passes, dec->width, dec->height, c->ring,
-                               c->lines, c->work, &c->options, c->profile)) {
-      return CONVERT_ERR_SIZE;
-    }
-    int decoded = mpeg1_decode_picture(dec, first_pass_row, c);
+    int decoded = mpeg1_decode_picture(dec, NULL, NULL);
     if (decoded < 0) {
       return decoded;
     }
@@ -194,6 +202,17 @@ int convert_next(convert_t *c) {
       c->hidden++;  // shown for no frame: only the next one's reference
       continue;
     }
+    uint8_t *spare[2];
+    if (mpeg1_spare_rows(dec, spare, 2) < 2) {
+      return CONVERT_ERR_MEMORY;
+    }
+    picture16_memory_t memory = {spare[0], c->ring_c, c->lines_y,
+                                 spare[0] + PICTURE16_RING_Y_BYTES, spare[1]};
+    if (!picture16_passes_init(&c->passes, dec->width, dec->height, &memory,
+                               &c->options, c->profile)) {
+      return CONVERT_ERR_SIZE;
+    }
+    pass_over_store(c);
     picture16_passes_choose(&c->passes, &c->palette);
     const picture16_palette_t *dither = stable_palette(c);
     convert_picture_t info = {
@@ -201,14 +220,7 @@ int convert_next(convert_t *c) {
         c->keep_percent < 0 ? &c->palette : &c->shown};
     c->out.begin(c->out.ctx, &info);
     picture16_passes_dither(&c->passes, dither, out_lines, c);
-    for (int row = 0; row < dec->mb_rows; row++) {
-      const uint8_t *y;
-      const uint8_t *cb;
-      const uint8_t *cr;
-      if (mpeg1_reference_row(dec, row, &y, &cb, &cr)) {
-        picture16_passes_mb_row(&c->passes, row, y, cb, cr, dec->stride);
-      }
-    }
+    pass_over_store(c);
     c->pictures++;
     c->out.end(c->out.ctx, &info);
     return decoded;

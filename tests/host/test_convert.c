@@ -203,9 +203,8 @@ static void check_options(const picture16_options_t *options) {
   int ref = reference(options, ref_crcs, ref_firsts);
   CHECK_EQ(ref, 21);
 
-  static uint8_t ring[PICTURE16_SCALER_BYTES];
-  static _Alignas(4) uint8_t lines[PICTURE16_LINES_BYTES];
-  static uint8_t work[PICTURE16_WORK_BYTES];
+  static _Alignas(4) uint8_t ring_c[PICTURE16_RING_C_BYTES];
+  static _Alignas(4) uint8_t lines_y[PICTURE16_LINES_Y_BYTES];
   static mpeg_ps_t ps;
   static mpeg1_t m;
   static sink_t sink;
@@ -220,7 +219,7 @@ static void check_options(const picture16_options_t *options) {
   memset(&sink, 0, sizeof(sink));
   convert_out_t out = {sink_begin, sink_lines, sink_end, &sink};
   convert_t c;
-  convert_init(&c, &m, ring, lines, work, options, &out);
+  convert_init(&c, &m, ring_c, lines_y, options, &out);
   int type;
   while ((type = convert_next(&c)) > 0) {
     CHECK(type == MPEG1_PICTURE_I || type == MPEG1_PICTURE_P);
@@ -242,9 +241,8 @@ static void check_options(const picture16_options_t *options) {
 // The clip at `path` through the converter, its pictures into `sink`.
 static uint32_t run(const char *path, const picture16_options_t *options,
                     int keep_percent, sink_t *sink) {
-  static uint8_t ring[PICTURE16_SCALER_BYTES];
-  static _Alignas(4) uint8_t lines[PICTURE16_LINES_BYTES];
-  static uint8_t work[PICTURE16_WORK_BYTES];
+  static _Alignas(4) uint8_t ring_c[PICTURE16_RING_C_BYTES];
+  static _Alignas(4) uint8_t lines_y[PICTURE16_LINES_Y_BYTES];
   static mpeg_ps_t ps;
   static mpeg1_t m;
   static convert_t c;
@@ -258,7 +256,7 @@ static uint32_t run(const char *path, const picture16_options_t *options,
   give_slots(&m);
   memset(sink, 0, sizeof(*sink));
   convert_out_t out = {sink_begin, sink_lines, sink_end, sink};
-  convert_init(&c, &m, ring, lines, work, options, &out);
+  convert_init(&c, &m, ring_c, lines_y, options, &out);
   c.keep_percent = keep_percent;
   sink->c = &c;
   int type;

@@ -1073,6 +1073,16 @@ int mpeg1_next_picture(mpeg1_t *m) {
   }
 }
 
+int mpeg1_spare_rows(const mpeg1_t *m, uint8_t **rows, int max) {
+  int n = 0;
+  for (int s = 0; s < m->slot_count && n < max; s++) {
+    if (m->free_slots & (1u << s)) {
+      rows[n++] = m->slot[s];
+    }
+  }
+  return n;
+}
+
 bool mpeg1_reference_row(const mpeg1_t *m, int mb_row, const uint8_t **y,
                          const uint8_t **cb, const uint8_t **cr) {
   if (!m->have_reference || mb_row < 0 || mb_row >= m->mb_rows ||

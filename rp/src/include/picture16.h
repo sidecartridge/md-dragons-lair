@@ -165,6 +165,25 @@ void picture16_scaler_mb_row(picture16_scaler_t *s, int mb_row,
 #define PICTURE16_LINES 16
 #define PICTURE16_LINES_BYTES (PICTURE16_LINES * 320u + PICTURE16_LINES * 160u)
 
+// The two passes' memory, in pieces wherever the caller has room for them,
+// each 4-byte aligned: the scaler's ring (luma, then both chroma planes),
+// the scaled lines (luma, then both chroma planes), the histogram's.
+#define PICTURE16_RING_Y_BYTES (PICTURE16_RING_LINES * 320u)       // 5,120
+#define PICTURE16_RING_C_BYTES (PICTURE16_RING_LINES * 160u * 2u)  // 5,120
+#define PICTURE16_LINES_Y_BYTES (PICTURE16_LINES * 320u)           // 5,120
+#define PICTURE16_LINES_C_BYTES (PICTURE16_LINES * 160u)           // 2,560
+typedef struct {
+  uint8_t *ring_y;   // PICTURE16_RING_Y_BYTES
+  uint8_t *ring_c;   // PICTURE16_RING_C_BYTES
+  uint8_t *lines_y;  // PICTURE16_LINES_Y_BYTES
+  uint8_t *lines_c;  // PICTURE16_LINES_C_BYTES
+  void *work;        // PICTURE16_WORK_BYTES (and options->work2)
+} picture16_memory_t;
+
+// The pieces carved from one buffer of PICTURE16_SCALER_BYTES +
+// PICTURE16_LINES_BYTES and one of PICTURE16_WORK_BYTES.
+picture16_memory_t picture16_memory(uint8_t *buffer, void *work);
+
 // Gets index lines `line` and `line + 1`, `width` bytes each and `width`
 // apart, colour indices 0..15.
 typedef void (*picture16_lines_fn)(void *ctx, int line,
@@ -173,22 +192,18 @@ typedef void (*picture16_lines_fn)(void *ctx, int line,
 typedef struct {
   picture16_scaler_t scaler;
   picture16_options_t options;
-  uint8_t *ring;
-  uint8_t *lines;
-  void *work;
+  picture16_memory_t memory;
   int pass;  // 1: the histogram, 2: the dither
   picture16_lines_fn lines_fn;
   void *lines_ctx;
   picture16_profile_t *profile;
 } picture16_passes_t;
 
-// Starts the first pass. `ring` is PICTURE16_SCALER_BYTES and `lines`
-// PICTURE16_LINES_BYTES, both 4-byte aligned; `work` (and options->work2)
-// as picture16_convert()'s. `profile` (or NULL) gets each stage's time, the
-// histogram's and the dither's added up over their rows. False for another
-// size than 352x240.
+// Starts the first pass in `memory`. `profile` (or NULL) gets each stage's
+// time, the histogram's and the dither's added up over their rows. False
+// for another size than 352x240.
 bool picture16_passes_init(picture16_passes_t *p, int src_w, int src_h,
-                           uint8_t *ring, uint8_t *lines, void *work,
+                           const picture16_memory_t *memory,
                            const picture16_options_t *options,
                            picture16_profile_t *profile);
 

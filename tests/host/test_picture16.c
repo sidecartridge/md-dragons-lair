@@ -227,8 +227,11 @@ static void check_two_pass(const char *what) {
           memset(two_pass_out, 0xEE, sizeof(two_pass_out));
           memset(ring, 0xA5, sizeof(ring));
           memset(lines, 0xA5, sizeof(lines));
-          CHECK(picture16_passes_init(&p, SRC_W, SRC_H, ring, lines, work,
-                                      &o2, NULL));
+          // The memory in pieces, from separate buffers.
+          picture16_memory_t mem = {ring, ring + PICTURE16_RING_Y_BYTES,
+                                    lines, lines + PICTURE16_LINES_Y_BYTES,
+                                    work};
+          CHECK(picture16_passes_init(&p, SRC_W, SRC_H, &mem, &o2, NULL));
           feed(&p);
           picture16_passes_choose(&p, &p2);
           picture16_passes_dither(&p, &p2, take_lines, NULL);
@@ -246,7 +249,9 @@ static void check_two_pass(const char *what) {
     fprintf(stderr, "%s: %d two-pass conversions differ\n", what, diffs);
   }
   picture16_passes_t p;
-  CHECK(!picture16_passes_init(&p, 320, 240, ring, lines, work, NULL, NULL));
+  picture16_memory_t mem = {ring, ring + PICTURE16_RING_Y_BYTES, lines,
+                            lines + PICTURE16_LINES_Y_BYTES, work};
+  CHECK(!picture16_passes_init(&p, 320, 240, &mem, NULL, NULL));
 }
 
 static uint32_t rng = 12345;

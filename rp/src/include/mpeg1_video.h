@@ -191,6 +191,12 @@ int mpeg1_decode_picture(mpeg1_t *m, mpeg1_row_fn row, void *ctx);
 // Skips the rest of the current picture without decoding it.
 void mpeg1_skip_picture(mpeg1_t *m);
 
+// With a frame store, between a picture's decode and the next one's: the
+// store's rows that hold no part of the picture (two at least: the store
+// has mb_rows + 2), up to `max` of them. Returns how many; the caller may
+// use them until the next picture's decode starts.
+int mpeg1_spare_rows(const mpeg1_t *m, uint8_t **rows, int max);
+
 // With a frame store, after a picture was decoded: its macroblock row
 // `mb_row` as the row callback had it (the stride is m->stride), until the
 // next picture's decode starts. False without a reference.

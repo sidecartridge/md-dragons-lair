@@ -6,13 +6,14 @@
  *              the decoded picture (picture16_passes_*), and placed on the
  *              app's 25 frames a second (cadence.h). B pictures are skipped.
  *
- * The first pass runs in the decoder's row callback, as the rows come out;
- * the second reads the picture back from the frame store before the next
- * picture's decode starts. No scaled picture is kept. Between the two, the
- * next I or P picture's header is read (the B pictures before it skipped,
- * which leaves the store alone), so a picture's frames are known before its
- * second pass; a picture shown for no frame is decoded (the next one needs
- * it) but not converted.
+ * Both passes read the decoded picture from the frame store, before the
+ * next picture's decode starts, and work in the store's two spare rows (the
+ * scaler's luma ring and the scaled chroma lines in one, the histogram in
+ * the other) and in two small buffers of the caller's: no scaled picture is
+ * kept. Before them, the next I or P picture's header is read (the B
+ * pictures before it skipped, which leaves the store alone), so a picture's
+ * frames are known; a picture shown for no frame is decoded (the next one
+ * needs it) but not converted.
  *
  * Palette stability (keep_percent >= 0), so that what did not move costs
  * nothing from one frame to the next: a picture is dithered with the
@@ -48,8 +49,9 @@
 #define CONVERT_KEEP_PERCENT 10
 
 enum {
-  CONVERT_ERR_RATE = -20,  // a picture rate MPEG-1 does not define
-  CONVERT_ERR_SIZE = -21,  // not 352x240
+  CONVERT_ERR_RATE = -20,    // a picture rate MPEG-1 does not define
+  CONVERT_ERR_SIZE = -21,    // not 352x240
+  CONVERT_ERR_MEMORY = -22,  // a frame store without two spare rows
 };
 
 // A picture handed out.
@@ -77,9 +79,8 @@ typedef struct {
   picture16_passes_t passes;
   picture16_options_t options;
   picture16_profile_t *profile;  // NULL, or each picture's stage times
-  uint8_t *ring;
-  uint8_t *lines;
-  void *work;
+  uint8_t *ring_c;   // the caller's: the scaler's chroma ring
+  uint8_t *lines_y;  // and the scaled luma lines
   convert_out_t out;
   uint32_t num;  // the clip's picture rate, num / den a second
   uint32_t den;
@@ -102,10 +103,12 @@ typedef struct {
   uint8_t line_pair[2 * 320];
 } convert_t;
 
-// The decoder `dec` has its frame store (mpeg1_set_slots()). `ring`,
-// `lines` and `work` (and options->work2) as picture16_passes_init()'s.
-void convert_init(convert_t *c, mpeg1_t *dec, uint8_t *ring, uint8_t *lines,
-                  void *work, const picture16_options_t *options,
+// The decoder `dec` has its frame store (mpeg1_set_slots()), its rows
+// 4-byte aligned. `ring_c` is PICTURE16_RING_C_BYTES and `lines_y`
+// PICTURE16_LINES_Y_BYTES, both 4-byte aligned (and options->work2, if any,
+// PICTURE16_WORK_BYTES).
+void convert_init(convert_t *c, mpeg1_t *dec, uint8_t *ring_c,
+                  uint8_t *lines_y, const picture16_options_t *options,
                   const convert_out_t *out);
 
 // Converts the clip's next I or P picture. Returns its type, 0 at the end

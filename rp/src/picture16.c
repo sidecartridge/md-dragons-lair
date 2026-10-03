@@ -1200,17 +1200,25 @@ void picture16_scaler_mb_row(picture16_scaler_t *s, int mb_row,
 // --- Two passes -----------------------------------------------------------------
 
 #define LINES_W 320  // the scaled lines' width
-#define LINES_Y (PICTURE16_LINES * LINES_W)
 #define LINES_C (PICTURE16_LINES / 2 * (LINES_W / 2))
+
+picture16_memory_t picture16_memory(uint8_t *buffer, void *work) {
+  picture16_memory_t m = {buffer, buffer + PICTURE16_RING_Y_BYTES,
+                          buffer + PICTURE16_SCALER_BYTES,
+                          buffer + PICTURE16_SCALER_BYTES +
+                              PICTURE16_LINES_Y_BYTES,
+                          work};
+  return m;
+}
 
 // Chroma row `cy`'s two luma lines (next to each other: the ring's length
 // is even), and its Cb and Cr lines.
 static uint8_t *pass_luma(const picture16_passes_t *p, int cy) {
-  return p->lines + ((2 * cy) % PICTURE16_LINES) * LINES_W;
+  return p->memory.lines_y + ((2 * cy) % PICTURE16_LINES) * LINES_W;
 }
 
 static const uint8_t *pass_cb(const picture16_passes_t *p, int cy) {
-  return p->lines + LINES_Y + (cy % (PICTURE16_LINES / 2)) * (LINES_W / 2);
+  return p->memory.lines_c + (cy % (PICTURE16_LINES / 2)) * (LINES_W / 2);
 }
 
 static const uint8_t *pass_cr(const picture16_passes_t *p, int cy) {
@@ -1236,7 +1244,7 @@ static void count_rows_job(void *arg) {
 
 static void mix_rows_job(void *arg) {
   pass_job_t *j = (pass_job_t *)arg;
-  uint8_t *table = (uint8_t *)j->p->work;
+  uint8_t *table = (uint8_t *)j->p->memory.work;
   const mix_t *mix = (const mix_t *)(table + BINS);
   for (int cy = j->first; cy < j->end; cy += 2) {
     dither_mix_row(pass_luma(j->p, cy), pass_cb(j->p, cy), pass_cr(j->p, cy),
@@ -1250,7 +1258,7 @@ static void pass_rows(void *ctx, int c0, int c1) {
   const picture16_options_t *o = &p->options;
   uint32_t t0 = now(p->profile);
   if (p->pass == 1) {
-    uint16_t *hist = (uint16_t *)p->work;
+    uint16_t *hist = (uint16_t *)p->memory.work;
     if (o->work2 != NULL && o->run2 != NULL) {
       pass_job_t even = {p, c0, c1, hist};
       pass_job_t odd = {p, c0 + 1, c1, (uint16_t *)o->work2};
@@ -1277,7 +1285,7 @@ static void pass_rows(void *ctx, int c0, int c1) {
                                 : NULL;
     for (int cy = c0; cy < c1; cy++) {
       dither_row(pass_luma(p, cy), pass_cb(p, cy), pass_cr(p, cy), LINES_W,
-                 cy, (const uint8_t *)p->work, offsets);
+                 cy, (const uint8_t *)p->memory.work, offsets);
     }
   }
   if (p->profile != NULL) {
@@ -1290,9 +1298,12 @@ static void pass_rows(void *ctx, int c0, int c1) {
 
 static void pass_scaler(picture16_passes_t *p) {
   picture16_scaler_t *s = &p->scaler;
-  picture16_scaler_init(s, SCALER_SRC_W, SCALER_SRC_H, p->ring, p->lines,
-                        p->lines + LINES_Y, p->lines + LINES_Y + LINES_C,
-                        SCALER_OUT_W, SCALER_OUT_H);
+  const picture16_memory_t *m = &p->memory;
+  picture16_scaler_init(s, SCALER_SRC_W, SCALER_SRC_H, m->ring_y, m->lines_y,
+                        m->lines_c, m->lines_c + LINES_C, SCALER_OUT_W,
+                        SCALER_OUT_H);
+  s->ring_cb = m->ring_c;
+  s->ring_cr = m->ring_c + PICTURE16_RING_LINES * (SCALER_OUT_W / 2);
   s->run2 = p->options.run2;
   s->out_lines = PICTURE16_LINES;
   s->rows = pass_rows;
@@ -1300,7 +1311,7 @@ static void pass_scaler(picture16_passes_t *p) {
 }
 
 bool picture16_passes_init(picture16_passes_t *p, int src_w, int src_h,
-                           uint8_t *ring, uint8_t *lines, void *work,
+                           const picture16_memory_t *memory,
                            const picture16_options_t *options,
                            picture16_profile_t *profile) {
   if (src_w != SCALER_SRC_W || src_h != SCALER_SRC_H) {
@@ -1309,14 +1320,12 @@ bool picture16_passes_init(picture16_passes_t *p, int src_w, int src_h,
   static const picture16_options_t defaults = {
       4, PICTURE16_WEIGHT_PIXELS, PICTURE16_DITHER_BAYER, NULL, NULL};
   p->options = (options != NULL) ? *options : defaults;
-  p->ring = ring;
-  p->lines = lines;
-  p->work = work;
+  p->memory = *memory;
   p->profile = profile;
   p->lines_fn = NULL;
   p->lines_ctx = NULL;
   p->pass = 1;
-  memset(work, 0, BINS * sizeof(uint16_t));
+  memset(memory->work, 0, BINS * sizeof(uint16_t));
   if (p->options.work2 != NULL && p->options.run2 != NULL) {
     memset(p->options.work2, 0, BINS * sizeof(uint16_t));
   }
@@ -1338,7 +1347,7 @@ void picture16_passes_choose(picture16_passes_t *p,
                              picture16_palette_t *palette) {
   const picture16_options_t *o = &p->options;
   int gun_bits = (o->gun_bits == 3) ? 3 : 4;
-  uint16_t *hist = (uint16_t *)p->work;
+  uint16_t *hist = (uint16_t *)p->memory.work;
   uint32_t t0 = now(p->profile);
   if (o->work2 != NULL && o->run2 != NULL) {
     const uint16_t *hist2 = (const uint16_t *)o->work2;
@@ -1362,7 +1371,7 @@ void picture16_passes_choose(picture16_passes_t *p,
 void picture16_passes_refine(picture16_passes_t *p,
                              picture16_palette_t *palette) {
   int gun_bits = (p->options.gun_bits == 3) ? 3 : 4;
-  refine((const uint16_t *)p->work, gun_bits, palette, p->options.run2);
+  refine((const uint16_t *)p->memory.work, gun_bits, palette, p->options.run2);
 }
 
 uint64_t picture16_passes_error(const picture16_passes_t *p,
@@ -1371,7 +1380,7 @@ uint64_t picture16_passes_error(const picture16_passes_t *p,
   int pal8[MAX_COLOURS][3] = {{0, 0, 0}};
   int n = palette->colours > 0 ? palette->colours : 1;
   palette_8bit(palette, gun_bits, pal8);
-  const uint16_t *hist = (const uint16_t *)p->work;
+  const uint16_t *hist = (const uint16_t *)p->memory.work;
   uint64_t error = 0;
   for (int bin = 0; bin < BINS; bin++) {
     if (hist[bin] == 0) {
@@ -1393,10 +1402,10 @@ void picture16_passes_dither(picture16_passes_t *p,
   // The histogram is no longer needed: its memory holds the table.
   uint32_t t0 = now(p->profile);
   if (o->dither == PICTURE16_DITHER_MIX) {
-    build_mix(palette, gun_bits, (uint8_t *)p->work,
-              (mix_t *)((uint8_t *)p->work + BINS));
+    build_mix(palette, gun_bits, (uint8_t *)p->memory.work,
+              (mix_t *)((uint8_t *)p->memory.work + BINS));
   } else {
-    build_table(palette, gun_bits, (uint8_t *)p->work);
+    build_table(palette, gun_bits, (uint8_t *)p->memory.work);
   }
   if (p->profile != NULL) {
     p->profile->table = since(p->profile, t0);

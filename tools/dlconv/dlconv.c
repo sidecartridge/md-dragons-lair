@@ -470,10 +470,9 @@ static int convert_clip(int argc, char **argv) {
   }
   static mpeg_ps_t cps;
   static mpeg1_t cdec;
-  static uint8_t store[MPEG1_MAX_SLOTS][MPEG1_SLOT_BYTES];
-  static _Alignas(4) uint8_t ring[PICTURE16_SCALER_BYTES];
-  static _Alignas(4) uint8_t lines[PICTURE16_LINES_BYTES];
-  static uint8_t work[PICTURE16_WORK_BYTES];
+  static _Alignas(4) uint8_t store[MPEG1_MAX_SLOTS][MPEG1_SLOT_BYTES];
+  static _Alignas(4) uint8_t ring_c[PICTURE16_RING_C_BYTES];
+  static _Alignas(4) uint8_t lines_y[PICTURE16_LINES_Y_BYTES];
   uint8_t *slots[MPEG1_MAX_SLOTS];
   for (unsigned i = 0; i < MPEG1_MAX_SLOTS; i++) {
     slots[i] = store[i];
@@ -486,7 +485,7 @@ static int convert_clip(int argc, char **argv) {
                                  PICTURE16_DITHER_MIX, NULL, NULL};
   convert_out_t out = {conv_begin, conv_lines, conv_end, &sink};
   static convert_t c;
-  convert_init(&c, &cdec, ring, lines, work, &options, &out);
+  convert_init(&c, &cdec, ring_c, lines_y, &options, &out);
   c.keep_percent = keep;
   sink.conv = &c;
   int counts[3] = {0};
@@ -647,10 +646,9 @@ static int encode_clip(int argc, char **argv) {
   rewind(in);
   static mpeg_ps_t cps;
   static mpeg1_t cdec;
-  static uint8_t store[MPEG1_MAX_SLOTS][MPEG1_SLOT_BYTES];
-  static _Alignas(4) uint8_t ring[PICTURE16_SCALER_BYTES];
-  static _Alignas(4) uint8_t lines[PICTURE16_LINES_BYTES];
-  static uint8_t work[PICTURE16_WORK_BYTES];
+  static _Alignas(4) uint8_t store[MPEG1_MAX_SLOTS][MPEG1_SLOT_BYTES];
+  static _Alignas(4) uint8_t ring_c[PICTURE16_RING_C_BYTES];
+  static _Alignas(4) uint8_t lines_y[PICTURE16_LINES_Y_BYTES];
   uint8_t *slots[MPEG1_MAX_SLOTS];
   for (unsigned i = 0; i < MPEG1_MAX_SLOTS; i++) {
     slots[i] = store[i];
@@ -670,7 +668,7 @@ static int encode_clip(int argc, char **argv) {
                                  PICTURE16_DITHER_MIX, NULL, NULL};
   convert_out_t out = {enc_begin, enc_lines, enc_end, &sink};
   static convert_t c;
-  convert_init(&c, &cdec, ring, lines, work, &options, &out);
+  convert_init(&c, &cdec, ring_c, lines_y, &options, &out);
   c.keep_percent = keep;
   int type;
   while ((type = convert_next(&c)) > 0) {
