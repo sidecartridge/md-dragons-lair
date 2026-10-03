@@ -41,7 +41,7 @@ A template for building **sub-20-millisecond audiovisual Sidecartridge Multi-dev
 - **Sampled sound**: 8-bit at 12.5 kHz through the DMA sound chip on an STE or a Mega STE, ~6 kHz 6-bit out the YM2149 elsewhere; one asset plays on both. Or, in the **25 fps profile**, 25 kHz and ~22 kHz (see "Profiles" below).
 - **Atari ST keyboard, mouse and joysticks handled on the RP2040** — decoded scancodes, mouse movement and stick states delivered straight to your app.
 
-Network plumbing (WiFi / lwIP / mbedTLS / httpc) was deliberately stripped — apps that need it bring it back from `md-microfirmware-template` upstream.
+The app has no radio: the Pico W's WiFi chip is never brought up and no network code is linked (WiFi / lwIP / mbedTLS / httpc were stripped from `md-microfirmware-template`). The WiFi entries in the global settings are Booster's and must stay (see `gconfig.c` below): never remove them.
 
 ## Build
 
