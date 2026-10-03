@@ -78,6 +78,7 @@ typedef struct {
   uint32_t sd_start_ms;   // after the RP started
   uint32_t sd_start_hellos;  // ST hellos seen when it started: 0, timeout
   bool sd_ok;
+  int sd_result;       // sdcard_initFilesystem()'s
   bool image_found;
   int image_result;   // iso9660_mount() of the last candidate
   uint32_t entries;   // in the image's root directory
@@ -521,6 +522,40 @@ static void draw_results(void) {
 
 static bool draw_sound_line(int row);
 
+// The machine and the TOS the ST reported at its last boot, at the right of
+// `row`. The machine byte does not tell a Mega ST from an ST.
+static void draw_machine(int row) {
+  if (st_session_hellos() == 0) {
+    return;
+  }
+  const char *name;
+  switch (st_session_machine()) {
+    case ST_MACHINE_ST:
+      name = "ST";
+      break;
+    case ST_MACHINE_STE:
+      name = "STE";
+      break;
+    case ST_MACHINE_MEGASTE:
+      name = "MEGA STE";
+      break;
+    case ST_MACHINE_TT:
+      name = "TT";
+      break;
+    case ST_MACHINE_FALCON:
+      name = "FALCON";
+      break;
+    default:
+      name = "?";
+      break;
+  }
+  uint16_t tos = st_session_tos_version();
+  char buf[COLS + 1];
+  int n = snprintf(buf, sizeof(buf), "%s  TOS %X.%02X", name,
+                   (unsigned)(tos >> 8), (unsigned)(tos & 0xFFu));
+  text(COLS - n, row, C_DIM, buf);
+}
+
 static void bench_draw(void) {
   fb_chunked_clear(C_BACK);
   font_set_font(&font8x8);
@@ -530,6 +565,8 @@ static void bench_draw(void) {
 
   if (!benchResults.sd_started) {
     text(0, 2, C_TEXT, "WAITING FOR THE ST, THEN THE SD CARD");
+  } else if (benchResults.sd_result == SDCARD_CREATE_FOLDER_ERROR) {
+    text(0, 2, C_BAD, "CANNOT CREATE THE FOLDER " BENCH_FOLDER);
   } else if (!benchResults.sd_ok) {
     text(0, 2, C_BAD, "NO SD CARD");
   } else {
@@ -537,6 +574,7 @@ static void bench_draw(void) {
           (unsigned long)(s_configured_hz / 1000u));
     textf(0, 3, C_TEXT, "FOLDER  %s", BENCH_FOLDER);
   }
+  draw_machine(3);
   if (benchResults.sd_ok && !benchResults.image_found) {
     text(0, 4, C_BAD, "NO CD-ROM IMAGE IN THE FOLDER");
     text(0, 5, C_TEXT, "COPY DL_CDROM_V31.ISO INTO " BENCH_FOLDER);
@@ -1378,8 +1416,8 @@ static void bench_start_sd(void) {
   benchResults.sd_started = true;
   benchResults.sd_start_ms = (time_us_32() - s_boot_us) / 1000u;
   benchResults.sd_start_hellos = st_session_hellos();
-  benchResults.sd_ok =
-      sdcard_initFilesystem(&s_fs, BENCH_FOLDER) == SDCARD_INIT_OK;
+  benchResults.sd_result = sdcard_initFilesystem(&s_fs, BENCH_FOLDER);
+  benchResults.sd_ok = benchResults.sd_result == SDCARD_INIT_OK;
   DPRINTF("SD card started %lu ms after boot (%s): %s\n",
           (unsigned long)benchResults.sd_start_ms,
           benchResults.sd_start_hellos ? "the ST said hello" : "timeout",
