@@ -1359,6 +1359,12 @@ void picture16_passes_choose(picture16_passes_t *p,
   }
 }
 
+void picture16_passes_refine(picture16_passes_t *p,
+                             picture16_palette_t *palette) {
+  int gun_bits = (p->options.gun_bits == 3) ? 3 : 4;
+  refine((const uint16_t *)p->work, gun_bits, palette, p->options.run2);
+}
+
 uint64_t picture16_passes_error(const picture16_passes_t *p,
                                 const picture16_palette_t *palette) {
   int gun_bits = (p->options.gun_bits == 3) ? 3 : 4;

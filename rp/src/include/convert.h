@@ -75,6 +75,7 @@ typedef struct {
   uint8_t map[16];             // in_use's entry -> its slot
   bool remap;                 // map is not the identity
   uint32_t kept;              // pictures dithered with the palette in use
+  uint32_t evolved;           // with it refined on them, entries in place
   uint8_t line_pair[2 * 320];
 } convert_t;
 

@@ -102,6 +102,19 @@ static const picture16_palette_t *stable_palette(convert_t *c) {
     c->kept++;
     return &c->in_use;
   }
+  // The palette in use refined on the picture: its colours move, each in
+  // its slot, instead of the picture's own palette taking new slots.
+  picture16_palette_t evolved = c->in_use;
+  picture16_passes_refine(&c->passes, &evolved);
+  if (picture16_passes_error(&c->passes, &evolved) * 100u <=
+      own * (uint64_t)(100 + c->keep_percent)) {
+    c->evolved++;
+    c->in_use = evolved;
+    for (int e = 0; e < evolved.colours; e++) {
+      c->shown.rgb444[c->map[e]] = evolved.rgb444[e];
+    }
+    return &c->in_use;
+  }
   take_slots(c);
   return &c->in_use;
 }

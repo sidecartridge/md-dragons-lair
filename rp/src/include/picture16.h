@@ -202,6 +202,12 @@ void picture16_passes_mb_row(picture16_passes_t *p, int mb_row,
 void picture16_passes_choose(picture16_passes_t *p,
                              picture16_palette_t *palette);
 
+// After picture16_passes_choose(), before picture16_passes_dither():
+// `palette` refined on the picture's colours from where it is (the palette
+// choice's k-means rounds), its entries in their order.
+void picture16_passes_refine(picture16_passes_t *p,
+                             picture16_palette_t *palette);
+
 // After picture16_passes_choose(), before picture16_passes_dither(): how far
 // `palette` is from the picture's colours. Each colour of the histogram, as
 // the palette choice counts it, to its nearest entry: the squared 8-bit

@@ -29,7 +29,9 @@
 //                                     picture to the next; OUT.rgb its
 //                                     frames at 25 a second, 320x200 RGB,
 //                                     for ffmpeg -f rawvideo -pix_fmt rgb24
-//                                     -s 320x200 -r 25
+//                                     -s 320x200 -r 25 (--truecolor: the
+//                                     scaled picture before its palette, at
+//                                     the same cadence)
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -307,6 +309,7 @@ typedef struct {
   uint32_t still_pictures;      // no index changed
   uint32_t kept_before;
   const convert_t *conv;
+  bool truecolor;               // OUT gets the scaled picture, in RGB
   uint8_t rgb[320 * 200 * 3];  // the picture shown, from `shown_from`
   FILE *out;
   int bits;
@@ -368,12 +371,43 @@ static void conv_picture(void *ctx, const picture16_palette_t *palette,
   if (k->have) {
     conv_write(k, first_frame);
   }
-  for (int i = 0; i < 320 * 200; i++) {
-    uint16_t c = palette->rgb444[k->indices[i]];
-    for (int g = 0; g < 3; g++) {
-      int gun = (c >> (8 - 4 * g)) & 15;
-      k->rgb[3 * i + g] =
-          (uint8_t)((k->bits == 4) ? gun * 17 : (gun >> 1) * 255 / 7);
+  if (k->truecolor) {
+    // The stored picture scaled again, whole, and its colours as the dither
+    // sees them (298 (Y - 16), BT.601 terms, a chroma sample per 2 x 2).
+    static uint8_t ty[200][320], tcb[100][160], tcr[100][160];
+    static _Alignas(4) uint8_t tring[PICTURE16_SCALER_BYTES];
+    picture16_scaler_t sc;
+    picture16_scaler_init(&sc, k->dec->width, k->dec->height, tring,
+                          &ty[0][0], &tcb[0][0], &tcr[0][0], 320, 200);
+    for (int row = 0; row < k->dec->mb_rows; row++) {
+      const uint8_t *y;
+      const uint8_t *cb;
+      const uint8_t *cr;
+      if (mpeg1_reference_row(k->dec, row, &y, &cb, &cr)) {
+        picture16_scaler_mb_row(&sc, row, y, cb, cr, k->dec->stride);
+      }
+    }
+    for (int py = 0; py < 200; py++) {
+      for (int px = 0; px < 320; px++) {
+        int d = tcb[py / 2][px / 2] - 128;
+        int e = tcr[py / 2][px / 2] - 128;
+        int c = 298 * (ty[py][px] - 16) + 128;
+        int v[3] = {(c + 409 * e) >> 8, (c - 100 * d - 208 * e) >> 8,
+                    (c + 516 * d) >> 8};
+        for (int g = 0; g < 3; g++) {
+          k->rgb[3 * (py * 320 + px) + g] =
+              (uint8_t)(v[g] < 0 ? 0 : v[g] > 255 ? 255 : v[g]);
+        }
+      }
+    }
+  } else {
+    for (int i = 0; i < 320 * 200; i++) {
+      uint16_t c = palette->rgb444[k->indices[i]];
+      for (int g = 0; g < 3; g++) {
+        int gun = (c >> (8 - 4 * g)) & 15;
+        k->rgb[3 * i + g] =
+            (uint8_t)((k->bits == 4) ? gun * 17 : (gun >> 1) * 255 / 7);
+      }
     }
   }
   k->have = true;
@@ -394,6 +428,8 @@ static int convert_clip(int argc, char **argv) {
       keep = atoi(argv[++a]);
     } else if (strcmp(argv[a], "-v") == 0) {
       sink.verbose = true;
+    } else if (strcmp(argv[a], "--truecolor") == 0) {
+      sink.truecolor = true;
     } else {
       out_path = argv[a];
     }
@@ -439,10 +475,11 @@ static int convert_clip(int argc, char **argv) {
          (unsigned)sink.clip_crc, type);
   if (c.pictures > 1) {
     uint32_t after = c.pictures - 1;
-    printf("palette kept on %u of %u pictures; per picture after the first: "
+    printf("palette kept on %u, evolved on %u of %u pictures; per picture "
+           "after the first: "
            "%.1f%% of the indices changed, %.1f%% of the 16-pixel groups, "
            "%.2f slots; %u pictures with no index changed\n",
-           (unsigned)c.kept, (unsigned)after,
+           (unsigned)c.kept, (unsigned)c.evolved, (unsigned)after,
            100.0 * (double)sink.changed_indices / ((double)after * 64000.0),
            100.0 * (double)sink.changed_groups / ((double)after * 4000.0),
            (double)sink.changed_slots / after, (unsigned)sink.still_pictures);
@@ -481,7 +518,8 @@ int main(int argc, char **argv) {
             "       dlconv preview CLIP.MPG OUT N...\n"
             "       dlconv audio CLIP.MPG [OUT.s16]\n"
             "       dlconv cadence CLIP.MPG [-v]\n"
-            "       dlconv convert CLIP.MPG [--st] [-v] [OUT.rgb]\n");
+            "       dlconv convert CLIP.MPG [--st] [--keep N] [--truecolor] [-v] "
+            "[OUT.rgb]\n");
     return 2;
   }
   FILE *in = fopen(argv[2], "rb");

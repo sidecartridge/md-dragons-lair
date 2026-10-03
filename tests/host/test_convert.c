@@ -4,8 +4,9 @@
  * the decoder's frame store gives the indices and the palette that the whole
  * decoded picture, scaled in full and converted by picture16_convert(),
  * gives; the pictures come at their cadence's frames. With palette
- * stability, each picture either keeps the palette shown before it or shows
- * the same colours as with its own palette, pixel for pixel; and a still
+ * stability, each picture keeps the palette in use, or has it refined with
+ * its entries in their slots, or shows the same colours as with its own
+ * palette, pixel for pixel; and a still
  * clip (data/still_352x240.mpg) keeps its palette and its indices from its
  * first picture on. */
 
@@ -136,6 +137,9 @@ typedef struct {
   // whether it kept the palette shown before it.
   const convert_t *c;
   uint32_t kept_before;
+  uint32_t evolved_before;
+  bool evolved[MAX_PICTURES];
+  uint8_t maps[MAX_PICTURES][16];
   uint16_t rgb[MAX_PICTURES][OUT_H * OUT_W / 8];  // every 8th pixel
   uint16_t palettes[MAX_PICTURES][16];
   uint8_t previous[OUT_H][OUT_W];
@@ -168,6 +172,9 @@ static void sink_picture(void *ctx, const picture16_palette_t *palette,
   if (k->c != NULL) {
     k->kept[k->count] = k->c->kept != k->kept_before;
     k->kept_before = k->c->kept;
+    k->evolved[k->count] = k->c->evolved != k->evolved_before;
+    k->evolved_before = k->c->evolved;
+    memcpy(k->maps[k->count], k->c->map, sizeof(k->c->map));
   }
   k->same_indices[k->count] =
       k->count > 0 &&
@@ -258,13 +265,22 @@ static void check_stability(void) {
     uint32_t kept = run("data/ibp_352x240.mpg", &o, 10, &stable);
     CHECK_EQ(stable.count, plain.count);
     uint32_t counted = 0;
+    uint32_t evolved = 0;
     for (int i = 0; i < stable.count; i++) {
+      CHECK(!(stable.kept[i] && stable.evolved[i]));
       if (stable.kept[i]) {
         counted++;
         CHECK(i > 0);
         if (i > 0) {
           CHECK(memcmp(stable.palettes[i], stable.palettes[i - 1],
                        sizeof(stable.palettes[i])) == 0);
+        }
+      } else if (stable.evolved[i]) {
+        // Refined in place: every entry in the slot it had.
+        evolved++;
+        CHECK(i > 0);
+        if (i > 0) {
+          CHECK(memcmp(stable.maps[i], stable.maps[i - 1], 16) == 0);
         }
       } else {
         // Its own palette, the indices relabelled: the same colours.
@@ -280,8 +296,10 @@ static void check_stability(void) {
       }
     }
     CHECK_EQ(counted, kept);
-    // The test pattern moves: a palette kept on some pictures, not all.
+    // The test pattern moves: a palette kept on some pictures and refined
+    // on others, not all.
     CHECK(kept > 0 && kept < (uint32_t)stable.count - 1);
+    CHECK(evolved > 0);
 
     // A still clip: the first P picture refines the I picture, and every
     // picture after it is the same: it keeps the palette, and the ordered
