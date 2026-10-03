@@ -140,10 +140,13 @@ static void check_damaged(void) {
   // Garbage first: the demultiplexer and the frame sync skip it.
   CHECK_EQ(decode(path, 3000, UINT32_MAX), n);
   CHECK(memcmp(clean, pcm, sizeof(int16_t) * (size_t)n) == 0);
-  // Cut in the middle of the file: the frames before the cut, then the end.
+  // Cut in the middle of the file: the frames before the cut as they were,
+  // then the frame the cut went through, its missing end taken as zeros (as
+  // ffmpeg takes it), then the end.
   int cut = decode(path, 0, 7000);
-  CHECK(cut > 0 && cut < n);
-  CHECK(memcmp(clean, pcm, sizeof(int16_t) * (size_t)cut) == 0);
+  CHECK(cut > (int)MP2_FRAME_SAMPLES && cut < n);
+  CHECK(memcmp(clean, pcm,
+               sizeof(int16_t) * (size_t)(cut - (int)MP2_FRAME_SAMPLES)) == 0);
 }
 
 static void check_pcm8(void) {
