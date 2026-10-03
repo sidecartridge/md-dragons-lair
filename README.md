@@ -66,7 +66,8 @@ second; `APP_PROFILE=PROFILE_50FPS ./build.sh ...` builds the 50 fps profile.
   mkdir -p build/dlconv
   cc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unknown-pragmas -I rp/src/include \
      tools/dlconv/dlconv.c rp/src/mpeg1_video.c rp/src/mpeg_ps.c rp/src/crc32.c \
-     rp/src/picture16.c rp/src/mp2_audio.c -o build/dlconv/dlconv
+     rp/src/picture16.c rp/src/mp2_audio.c rp/src/cadence.c rp/src/convert.c \
+     rp/src/clip.c -o build/dlconv/dlconv
   ```
 - With a Raspberry Pi Debug Probe on the cartridge's SWD and debug UART, `tools/dev/` builds,
   flashes and checks the firmware, captures its console and drives the bench from the host:

@@ -38,8 +38,13 @@
 #define DEVHOOKS_APP_SOUND 5      // WORD N [WORD 1]: scene clip N's sound
                                   // decoded and timed (1: played); no word:
                                   // stopped
-#define DEVHOOKS_APP_WRITE_TEST 6  // the card's write rate (a 2 MB scratch
-                                   // file in the folder, then deleted)
+#define DEVHOOKS_APP_WRITE_TEST 6  // [WORD: chunk in sectors] the card's
+                                   // write rate (a 2 MB scratch file in the
+                                   // folder, then deleted)
+#define DEVHOOKS_APP_CONVERT 7     // WORD N [WORD 3|4]: scene clip N
+                                   // converted into BENCH_FOLDER/<clip>.DLC
+                                   // (for an ST or an STE; the machine
+                                   // plugged in's by default); no word: back
 
 // At boot, before the main loop.
 void bench_init(void);
@@ -49,8 +54,14 @@ void bench_init(void);
 // image and reads its root directory.
 void bench_start_sd(void);
 
-// A new ST session: draw the screen again.
+// A new ST session: draw the screen again (a conversion still running is
+// stopped).
 void bench_restart(void);
+
+// Before the RP restarts: the card left idle, no file being written (a
+// restart during the card's writes leaves it unanswering until it loses
+// power: its chip select is fixed on this board).
+void bench_stop_card_work(void);
 
 void bench_handle_key(const ikbd_key_event_t *key);
 

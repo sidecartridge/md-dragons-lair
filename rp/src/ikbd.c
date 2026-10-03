@@ -18,13 +18,15 @@
 #include "debug.h"
 #include "ikbd_demux.h"
 #include "pico/stdlib.h"
-#include "pico/time.h"
 
-/* IKBD scancode for the ESC key. ESC press+release within
- * IKBD_ESC_RELEASE_TIMEOUT_US triggers CMD_BOOT_GEM via the cart
- * command sentinel. */
+/* IKBD scancode for the ESC key. ESC press+release less than
+ * IKBD_ESC_RELEASE_VBLS of the ST's VBLs apart triggers CMD_BOOT_GEM via the
+ * cart command sentinel. Counted on the ST's clock (its byte count, reported
+ * every VBL, in the same stream as the bytes), not when the RP reads the
+ * bytes: a main loop held up for a while (a conversion step) reads a press
+ * and its release far apart. */
 #define IKBD_SCANCODE_ESC 0x01u
-#define IKBD_ESC_RELEASE_TIMEOUT_US 200000u  /* 200 ms */
+#define IKBD_ESC_RELEASE_VBLS 10u  /* 200 ms at 50 Hz */
 
 #define IKBD_RING_MASK (IKBD_RING_CAPACITY - 1u)
 
@@ -69,8 +71,10 @@ static ikbd_key_event_t s_key_ring[IKBD_KEY_RING_SIZE];
 static uint8_t          s_key_head = 0;
 static uint8_t          s_key_tail = 0;
 
-/* ESC press+release timestamp (microseconds, 0 = no press pending). */
-static uint32_t s_esc_press_us = 0;
+/* The ST's VBLs seen in the stream, and the one of an ESC press pending. */
+static uint32_t s_vbls = 0;
+static uint32_t s_esc_press_vbl = 0;
+static bool s_esc_pressed = false;
 
 /* When true (default), ESC press+release pairs write CMD_BOOT_GEM to
  * the cart sentinel and userfw exits to GEM. Apps that want to own
@@ -174,7 +178,7 @@ void ikbd_init(void) {
   s_dropped_seen = 0;
   s_key_head = 0;
   s_key_tail = 0;
-  s_esc_press_us = 0;
+  s_esc_pressed = false;
   s_esc_auto_exit = true;
   ikbd_demux_init(&s_demux, push_key, NULL);
   for (unsigned i = 0; i < IKBD_RESYNC_CAUSES; i++) s_resyncs_reported[i] = 0;
@@ -217,14 +221,13 @@ static void push_key(void *ctx, uint8_t scancode, bool is_press) {
    * the expected value (cart_asM68kLong). */
   if (scancode == IKBD_SCANCODE_ESC) {
     if (is_press) {
-      uint32_t now_us = time_us_32();
-      if (now_us == 0u) now_us = 1u;  /* avoid the "no press" sentinel */
-      s_esc_press_us = now_us;
+      s_esc_pressed = true;
+      s_esc_press_vbl = s_vbls;
     } else {
-      uint32_t press = s_esc_press_us;
-      s_esc_press_us = 0;
-      if (s_esc_auto_exit && press != 0u &&
-          (time_us_32() - press) < IKBD_ESC_RELEASE_TIMEOUT_US) {
+      bool pressed = s_esc_pressed;
+      s_esc_pressed = false;
+      if (s_esc_auto_exit && pressed &&
+          (s_vbls - s_esc_press_vbl) < IKBD_ESC_RELEASE_VBLS) {
         *((volatile uint32_t *)((uintptr_t)&__rom_in_ram_start__ +
                                 CART_CMD_SENTINEL_OFFSET)) =
             cart_asM68kLong(CART_CMD_BOOT_GEM);
@@ -258,6 +261,7 @@ void ikbd_pump(void) {
         ikbd_demux_injected(&s_demux, value);
         break;
       case CART_ROM3_IKBD_COUNT_WINDOW:
+        s_vbls++;
         ikbd_demux_tick(&s_demux, value);
         break;
       case CART_ROM3_IKBD_OVERRUN_WINDOW:

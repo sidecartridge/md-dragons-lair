@@ -161,31 +161,35 @@ static inline void count_pixel(uint16_t *hist, const uint8_t *ct, int luma,
   hist[bin]++;
 }
 
-// Every `step`th chroma row from `cy0` into `hist`.
-static void HOT(count_colours)(const uint8_t *y, const uint8_t *cb,
-                               const uint8_t *cr, int width, int height,
-                               int cy0, int step, uint16_t *hist) {
-  // A count cannot overflow: one per 2 x 2 block, 16,000 at 320 x 200.
-  memset(hist, 0, BINS * sizeof(uint16_t));
+// One chroma row into `hist`: its two luma lines at `y0`, `width` apart.
+// A count cannot overflow: one per 2 x 2 block, 16,000 at 320 x 200.
+static void HOT(count_row)(const uint8_t *y0, const uint8_t *pcb,
+                           const uint8_t *pcr, int width, uint16_t *hist) {
   const uint8_t *ct = clamp_table + CLAMP_LOW;
   const int k = 298;
+  const uint8_t *y1 = y0 + width;
+  int cw = width / 2;
+  for (int cx = 0; cx < cw; cx++) {
+    chroma_t t = chroma_terms(pcb[cx], pcr[cx]);
+    const int off = 128 - 298 * 16;
+    int r = t.r + off, g = t.g + off, b = t.b + off;
+    // The colour of the 2 x 2 block that shares this chroma sample: the
+    // palette is chosen at the chroma's resolution, where the colour is
+    // (as good as all four pixels, measured over 5 clips, and 4x less).
+    int avg = (y0[2 * cx] + y0[2 * cx + 1] + y1[2 * cx] + y1[2 * cx + 1] +
+               2) >> 2;
+    count_pixel(hist, ct, avg, k, r, g, b);
+  }
+}
+
+// Every `step`th chroma row from `cy0` into `hist`, emptied first.
+static void count_colours(const uint8_t *y, const uint8_t *cb,
+                          const uint8_t *cr, int width, int height, int cy0,
+                          int step, uint16_t *hist) {
+  memset(hist, 0, BINS * sizeof(uint16_t));
   int cw = width / 2;
   for (int cy = cy0; cy < height / 2; cy += step) {
-    const uint8_t *y0 = y + (2 * cy) * width;
-    const uint8_t *y1 = y0 + width;
-    const uint8_t *pcb = cb + cy * cw;
-    const uint8_t *pcr = cr + cy * cw;
-    for (int cx = 0; cx < cw; cx++) {
-      chroma_t t = chroma_terms(pcb[cx], pcr[cx]);
-      const int off = 128 - 298 * 16;
-      int r = t.r + off, g = t.g + off, b = t.b + off;
-      // The colour of the 2 x 2 block that shares this chroma sample: the
-      // palette is chosen at the chroma's resolution, where the colour is
-      // (as good as all four pixels, measured over 5 clips, and 4x less).
-      int avg = (y0[2 * cx] + y0[2 * cx + 1] + y1[2 * cx] + y1[2 * cx + 1] +
-                 2) >> 2;
-      count_pixel(hist, ct, avg, k, r, g, b);
-    }
+    count_row(y + (2 * cy) * width, cb + cy * cw, cr + cy * cw, width, hist);
   }
 }
 
@@ -480,35 +484,45 @@ static void weigh_sqrt(uint16_t *hist) {
 
 // The colour of every pixel through the table, with an ordered offset
 // (`offsets`, 8x8; NULL for none) added first.
-static void dither(uint8_t *y, const uint8_t *cb, const uint8_t *cr,
-                   int width, int height, const uint8_t *table,
-                   const int8_t *offsets) {
+// Chroma row `cy`: its two luma lines at `y0`, `width` apart, become
+// indices. `offsets` is NULL for none.
+static void dither_row(uint8_t *y0, const uint8_t *pcb, const uint8_t *pcr,
+                       int width, int cy, const uint8_t *table,
+                       const int8_t *offsets) {
   static const int8_t none[64] = {0};
   if (offsets == NULL) {
     offsets = none;
   }
   int cw = width / 2;
-  for (int cy = 0; cy < height / 2; cy++) {
-    uint8_t *rows[2] = {y + (2 * cy) * width, y + (2 * cy + 1) * width};
-    const int8_t *dy[2] = {&offsets[((2 * cy) & 7) * 8],
-                           &offsets[((2 * cy + 1) & 7) * 8]};
-    for (int cx = 0; cx < cw; cx++) {
-      int d = cb[cy * cw + cx] - 128;
-      int e = cr[cy * cw + cx] - 128;
-      int tr = 409 * e;
-      int tg = -100 * d - 208 * e;
-      int tb = 516 * d;
-      for (int k = 0; k < 4; k++) {
-        int x = 2 * cx + (k & 1);
-        uint8_t *p = &rows[k >> 1][x];
-        int c = 298 * (*p - 16) + 128;
-        int t = dy[k >> 1][x & 7];
-        int r = CLAMP(((c + tr) >> 8) + t);
-        int g = CLAMP(((c + tg) >> 8) + t);
-        int b = CLAMP(((c + tb) >> 8) + t);
-        *p = table[((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)];
-      }
+  uint8_t *rows[2] = {y0, y0 + width};
+  const int8_t *dy[2] = {&offsets[((2 * cy) & 7) * 8],
+                         &offsets[((2 * cy + 1) & 7) * 8]};
+  for (int cx = 0; cx < cw; cx++) {
+    int d = pcb[cx] - 128;
+    int e = pcr[cx] - 128;
+    int tr = 409 * e;
+    int tg = -100 * d - 208 * e;
+    int tb = 516 * d;
+    for (int k = 0; k < 4; k++) {
+      int x = 2 * cx + (k & 1);
+      uint8_t *p = &rows[k >> 1][x];
+      int c = 298 * (*p - 16) + 128;
+      int t = dy[k >> 1][x & 7];
+      int r = CLAMP(((c + tr) >> 8) + t);
+      int g = CLAMP(((c + tg) >> 8) + t);
+      int b = CLAMP(((c + tb) >> 8) + t);
+      *p = table[((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)];
     }
+  }
+}
+
+static void dither(uint8_t *y, const uint8_t *cb, const uint8_t *cr,
+                   int width, int height, const uint8_t *table,
+                   const int8_t *offsets) {
+  int cw = width / 2;
+  for (int cy = 0; cy < height / 2; cy++) {
+    dither_row(y + (2 * cy) * width, cb + cy * cw, cr + cy * cw, width, cy,
+               table, offsets);
   }
 }
 
@@ -717,48 +731,45 @@ static inline uint8_t mix_pixel(int luma, const mix_terms_t *t, int th,
 #endif
 
 // Every `step`th chroma row of [cy0, cy1) of the picture.
-static void HOT(dither_mix)(uint8_t *y, const uint8_t *cb, const uint8_t *cr,
-                            int width, int cy0, int cy1, int step,
-                            uint8_t *table, const mix_t *mix) {
+// Chroma row `cy`: its two luma lines at `y0`, `width` apart, become
+// indices.
+static void HOT(dither_mix_row)(uint8_t *y0, const uint8_t *pcb,
+                                const uint8_t *pcr, int width, int cy,
+                                uint8_t *table, const mix_t *mix) {
   int cw = width / 2;
   mix_terms_t terms[MIX_CHUNK];
-  for (int cy = cy0; cy < cy1; cy += step) {
-    uint8_t *y0 = y + (2 * cy) * width;
-    const uint8_t *th0 = &bayer_rank[((2 * cy) & 7) * 8];
-    const uint8_t *th1 = &bayer_rank[((2 * cy + 1) & 7) * 8];
-    const uint8_t *pcb = cb + cy * cw;
-    const uint8_t *pcr = cr + cy * cw;
-    for (int cx0 = 0; cx0 < cw; cx0 += MIX_CHUNK) {
-      int n = (cw - cx0 < MIX_CHUNK) ? cw - cx0 : MIX_CHUNK;
-      for (int i = 0; i < n; i++) {
-        int cx = cx0 + i;
-        int x = 2 * cx;
-        chroma_t t = chroma_terms(pcb[cx], pcr[cx]);
-        const int off = 128 - 298 * 16;
-        terms[i].r = t.r + off;
-        terms[i].g = t.g + off;
-        terms[i].b = t.b + off;
-        terms[i].th[0] = th0[x & 7];
-        terms[i].th[1] = th0[(x + 1) & 7];
-        terms[i].th[2] = th1[x & 7];
-        terms[i].th[3] = th1[(x + 1) & 7];
-      }
-#if defined(__ARM_ARCH_6M__)
-      mix_rows_t rows = {y0 + 2 * cx0, y0 + 2 * (cx0 + n), terms, table,
-                         mix->pairs, width, mix, mix_choose};
-      p16_mix_rows(&rows);
-#else
-      for (int i = 0; i < n; i++) {
-        uint8_t *p = y0 + 2 * (cx0 + i);
-        p[0] = mix_pixel(p[0], &terms[i], terms[i].th[0], table, mix);
-        p[1] = mix_pixel(p[1], &terms[i], terms[i].th[1], table, mix);
-        p[width] =
-            mix_pixel(p[width], &terms[i], terms[i].th[2], table, mix);
-        p[width + 1] =
-            mix_pixel(p[width + 1], &terms[i], terms[i].th[3], table, mix);
-      }
-#endif
+  const uint8_t *th0 = &bayer_rank[((2 * cy) & 7) * 8];
+  const uint8_t *th1 = &bayer_rank[((2 * cy + 1) & 7) * 8];
+  for (int cx0 = 0; cx0 < cw; cx0 += MIX_CHUNK) {
+    int n = (cw - cx0 < MIX_CHUNK) ? cw - cx0 : MIX_CHUNK;
+    for (int i = 0; i < n; i++) {
+      int cx = cx0 + i;
+      int x = 2 * cx;
+      chroma_t t = chroma_terms(pcb[cx], pcr[cx]);
+      const int off = 128 - 298 * 16;
+      terms[i].r = t.r + off;
+      terms[i].g = t.g + off;
+      terms[i].b = t.b + off;
+      terms[i].th[0] = th0[x & 7];
+      terms[i].th[1] = th0[(x + 1) & 7];
+      terms[i].th[2] = th1[x & 7];
+      terms[i].th[3] = th1[(x + 1) & 7];
     }
+#if defined(__ARM_ARCH_6M__)
+    mix_rows_t rows = {y0 + 2 * cx0, y0 + 2 * (cx0 + n), terms, table,
+                       mix->pairs, width, mix, mix_choose};
+    p16_mix_rows(&rows);
+#else
+    for (int i = 0; i < n; i++) {
+      uint8_t *p = y0 + 2 * (cx0 + i);
+      p[0] = mix_pixel(p[0], &terms[i], terms[i].th[0], table, mix);
+      p[1] = mix_pixel(p[1], &terms[i], terms[i].th[1], table, mix);
+      p[width] =
+          mix_pixel(p[width], &terms[i], terms[i].th[2], table, mix);
+      p[width + 1] =
+          mix_pixel(p[width + 1], &terms[i], terms[i].th[3], table, mix);
+    }
+#endif
   }
 }
 
@@ -776,10 +787,13 @@ typedef struct {
   const mix_t *mix;
 } mix_job_t;
 
-static void HOT(mix_job)(void *arg) {
+static void mix_job(void *arg) {
   mix_job_t *j = (mix_job_t *)arg;
-  dither_mix(j->y, j->cb, j->cr, j->width, j->cy0, j->cy1, j->step, j->table,
-             j->mix);
+  int cw = j->width / 2;
+  for (int cy = j->cy0; cy < j->cy1; cy += j->step) {
+    dither_mix_row(j->y + (2 * cy) * j->width, j->cb + cy * cw,
+                   j->cr + cy * cw, j->width, cy, j->table, j->mix);
+  }
 }
 
 typedef struct {
@@ -792,7 +806,7 @@ typedef struct {
   uint16_t *hist;
 } count_job_t;
 
-static void HOT(count_job)(void *arg) {
+static void count_job(void *arg) {
   count_job_t *j = (count_job_t *)arg;
   count_colours(j->y, j->cb, j->cr, j->width, j->height, j->cy0, 2, j->hist);
 }
@@ -1105,9 +1119,11 @@ static void HOT(scale_down_job)(void *arg) {
   picture16_scaler_t *s = j->s;
   int w = s->out_w / 2;  // this core's share of a luma line
   int x = j->half * w;
+  int y_lines = s->out_lines;  // 0: whole planes
+  int c_lines = s->out_lines / 2;
   for (int o = j->out_y0; o < j->out_y1; o++) {
     const scaler_tap_t *t = &scaler_luma_y[o];
-    uint8_t *dst = s->out_y + o * s->out_w + x;
+    uint8_t *dst = s->out_y + (y_lines ? o % y_lines : o) * s->out_w + x;
     p16_down(s->ring_y + (x * PICTURE16_RING_LINES) + RING_Y_NEW +
                  (t->first - j->y0),
              dst, dst + w, t->weight);
@@ -1118,8 +1134,9 @@ static void HOT(scale_down_job)(void *arg) {
   for (int o = j->out_c0; o < j->out_c1; o++) {
     const scaler_tap_t *t = &scaler_chroma_y[o];
     int at = cx * PICTURE16_RING_LINES + RING_C_NEW + (t->first - j->c0);
-    uint8_t *dcb = s->out_cb + o * cw + cx;
-    uint8_t *dcr = s->out_cr + o * cw + cx;
+    int line = c_lines ? o % c_lines : o;
+    uint8_t *dcb = s->out_cb + line * cw + cx;
+    uint8_t *dcr = s->out_cr + line * cw + cx;
     p16_down(s->ring_cb + at, dcb, dcb + ch, t->weight);
     p16_down(s->ring_cr + at, dcr, dcr + ch, t->weight);
   }
@@ -1172,5 +1189,229 @@ void picture16_scaler_mb_row(picture16_scaler_t *s, int mb_row,
     run_two(s->run2, scale_down_job, &b, &a);
     s->next_y = ny;
     s->next_c = nc;
+    int complete = (nc < ny / 2) ? nc : ny / 2;
+    if (s->rows != NULL && complete > s->done_c) {
+      s->rows(s->rows_ctx, s->done_c, complete);
+      s->done_c = complete;
+    }
   }
+}
+
+// --- Two passes -----------------------------------------------------------------
+
+#define LINES_W 320  // the scaled lines' width
+#define LINES_C (PICTURE16_LINES / 2 * (LINES_W / 2))
+
+picture16_memory_t picture16_memory(uint8_t *buffer, void *work) {
+  picture16_memory_t m = {buffer, buffer + PICTURE16_RING_Y_BYTES,
+                          buffer + PICTURE16_SCALER_BYTES,
+                          buffer + PICTURE16_SCALER_BYTES +
+                              PICTURE16_LINES_Y_BYTES,
+                          work};
+  return m;
+}
+
+// Chroma row `cy`'s two luma lines (next to each other: the ring's length
+// is even), and its Cb and Cr lines.
+static uint8_t *pass_luma(const picture16_passes_t *p, int cy) {
+  return p->memory.lines_y + ((2 * cy) % PICTURE16_LINES) * LINES_W;
+}
+
+static const uint8_t *pass_cb(const picture16_passes_t *p, int cy) {
+  return p->memory.lines_c + (cy % (PICTURE16_LINES / 2)) * (LINES_W / 2);
+}
+
+static const uint8_t *pass_cr(const picture16_passes_t *p, int cy) {
+  return pass_cb(p, cy) + LINES_C;
+}
+
+// One core's share of a batch's chroma rows: every second one from `first`
+// up to `end`.
+typedef struct {
+  picture16_passes_t *p;
+  int first;
+  int end;
+  uint16_t *hist;  // the first pass's
+} pass_job_t;
+
+static void count_rows_job(void *arg) {
+  pass_job_t *j = (pass_job_t *)arg;
+  for (int cy = j->first; cy < j->end; cy += 2) {
+    count_row(pass_luma(j->p, cy), pass_cb(j->p, cy), pass_cr(j->p, cy),
+              LINES_W, j->hist);
+  }
+}
+
+static void mix_rows_job(void *arg) {
+  pass_job_t *j = (pass_job_t *)arg;
+  uint8_t *table = (uint8_t *)j->p->memory.work;
+  const mix_t *mix = (const mix_t *)(table + BINS);
+  for (int cy = j->first; cy < j->end; cy += 2) {
+    dither_mix_row(pass_luma(j->p, cy), pass_cb(j->p, cy), pass_cr(j->p, cy),
+                   LINES_W, cy, table, mix);
+  }
+}
+
+// The scaler's rows: chroma rows [c0, c1) are complete.
+static void pass_rows(void *ctx, int c0, int c1) {
+  picture16_passes_t *p = (picture16_passes_t *)ctx;
+  const picture16_options_t *o = &p->options;
+  uint32_t t0 = now(p->profile);
+  if (p->pass == 1) {
+    uint16_t *hist = (uint16_t *)p->memory.work;
+    if (o->work2 != NULL && o->run2 != NULL) {
+      pass_job_t even = {p, c0, c1, hist};
+      pass_job_t odd = {p, c0 + 1, c1, (uint16_t *)o->work2};
+      o->run2(count_rows_job, &odd, &even);
+    } else {
+      for (int cy = c0; cy < c1; cy++) {
+        count_row(pass_luma(p, cy), pass_cb(p, cy), pass_cr(p, cy), LINES_W,
+                  hist);
+      }
+    }
+    if (p->profile != NULL) {
+      p->profile->histogram += since(p->profile, t0);
+    }
+    return;
+  }
+  if (o->dither == PICTURE16_DITHER_MIX) {
+    pass_job_t even = {p, c0, c1, NULL};
+    pass_job_t odd = {p, c0 + 1, c1, NULL};
+    run_two(o->run2, mix_rows_job, &odd, &even);
+  } else {
+    const int8_t *offsets = o->dither == PICTURE16_DITHER_BAYER ? bayer
+                            : o->dither == PICTURE16_DITHER_BAYER_SOFT
+                                ? bayer_soft
+                                : NULL;
+    for (int cy = c0; cy < c1; cy++) {
+      dither_row(pass_luma(p, cy), pass_cb(p, cy), pass_cr(p, cy), LINES_W,
+                 cy, (const uint8_t *)p->memory.work, offsets);
+    }
+  }
+  if (p->profile != NULL) {
+    p->profile->dither += since(p->profile, t0);
+  }
+  for (int cy = c0; cy < c1; cy++) {
+    p->lines_fn(p->lines_ctx, 2 * cy, pass_luma(p, cy), LINES_W);
+  }
+}
+
+static void pass_scaler(picture16_passes_t *p) {
+  picture16_scaler_t *s = &p->scaler;
+  const picture16_memory_t *m = &p->memory;
+  picture16_scaler_init(s, SCALER_SRC_W, SCALER_SRC_H, m->ring_y, m->lines_y,
+                        m->lines_c, m->lines_c + LINES_C, SCALER_OUT_W,
+                        SCALER_OUT_H);
+  s->ring_cb = m->ring_c;
+  s->ring_cr = m->ring_c + PICTURE16_RING_LINES * (SCALER_OUT_W / 2);
+  s->run2 = p->options.run2;
+  s->out_lines = PICTURE16_LINES;
+  s->rows = pass_rows;
+  s->rows_ctx = p;
+}
+
+bool picture16_passes_init(picture16_passes_t *p, int src_w, int src_h,
+                           const picture16_memory_t *memory,
+                           const picture16_options_t *options,
+                           picture16_profile_t *profile) {
+  if (src_w != SCALER_SRC_W || src_h != SCALER_SRC_H) {
+    return false;
+  }
+  static const picture16_options_t defaults = {
+      4, PICTURE16_WEIGHT_PIXELS, PICTURE16_DITHER_BAYER, NULL, NULL};
+  p->options = (options != NULL) ? *options : defaults;
+  p->memory = *memory;
+  p->profile = profile;
+  p->lines_fn = NULL;
+  p->lines_ctx = NULL;
+  p->pass = 1;
+  memset(memory->work, 0, BINS * sizeof(uint16_t));
+  if (p->options.work2 != NULL && p->options.run2 != NULL) {
+    memset(p->options.work2, 0, BINS * sizeof(uint16_t));
+  }
+  if (profile != NULL) {
+    profile->histogram = profile->palette = profile->refine = 0;
+    profile->table = profile->dither = 0;
+  }
+  pass_scaler(p);
+  return true;
+}
+
+void picture16_passes_mb_row(picture16_passes_t *p, int mb_row,
+                             const uint8_t *y, const uint8_t *cb,
+                             const uint8_t *cr, int stride) {
+  picture16_scaler_mb_row(&p->scaler, mb_row, y, cb, cr, stride);
+}
+
+void picture16_passes_choose(picture16_passes_t *p,
+                             picture16_palette_t *palette) {
+  const picture16_options_t *o = &p->options;
+  int gun_bits = (o->gun_bits == 3) ? 3 : 4;
+  uint16_t *hist = (uint16_t *)p->memory.work;
+  uint32_t t0 = now(p->profile);
+  if (o->work2 != NULL && o->run2 != NULL) {
+    const uint16_t *hist2 = (const uint16_t *)o->work2;
+    for (int i = 0; i < BINS; i++) {
+      hist[i] = (uint16_t)(hist[i] + hist2[i]);
+    }
+  }
+  if (p->profile != NULL) {
+    p->profile->histogram += since(p->profile, t0);
+  }
+  t0 = now(p->profile);
+  if (o->weighting == PICTURE16_WEIGHT_SQRT) {
+    weigh_sqrt(hist);
+  }
+  median_cut(hist, gun_bits, palette, o->run2, p->profile);
+  if (p->profile != NULL) {
+    p->profile->palette = since(p->profile, t0);
+  }
+}
+
+void picture16_passes_refine(picture16_passes_t *p,
+                             picture16_palette_t *palette) {
+  int gun_bits = (p->options.gun_bits == 3) ? 3 : 4;
+  refine((const uint16_t *)p->memory.work, gun_bits, palette, p->options.run2);
+}
+
+uint64_t picture16_passes_error(const picture16_passes_t *p,
+                                const picture16_palette_t *palette) {
+  int gun_bits = (p->options.gun_bits == 3) ? 3 : 4;
+  int pal8[MAX_COLOURS][3] = {{0, 0, 0}};
+  int n = palette->colours > 0 ? palette->colours : 1;
+  palette_8bit(palette, gun_bits, pal8);
+  const uint16_t *hist = (const uint16_t *)p->memory.work;
+  uint64_t error = 0;
+  for (int bin = 0; bin < BINS; bin++) {
+    if (hist[bin] == 0) {
+      continue;
+    }
+    int r = bin8(bin >> 8), g = bin8((bin >> 4) & 15), b = bin8(bin & 15);
+    int e = nearest(pal8, n, r, g, b);
+    int dr = r - pal8[e][0], dg = g - pal8[e][1], db = b - pal8[e][2];
+    error += (uint64_t)hist[bin] * (uint32_t)(dr * dr + dg * dg + db * db);
+  }
+  return error;
+}
+
+void picture16_passes_dither(picture16_passes_t *p,
+                             const picture16_palette_t *palette,
+                             picture16_lines_fn lines_fn, void *lines_ctx) {
+  const picture16_options_t *o = &p->options;
+  int gun_bits = (o->gun_bits == 3) ? 3 : 4;
+  // The histogram is no longer needed: its memory holds the table.
+  uint32_t t0 = now(p->profile);
+  if (o->dither == PICTURE16_DITHER_MIX) {
+    build_mix(palette, gun_bits, (uint8_t *)p->memory.work,
+              (mix_t *)((uint8_t *)p->memory.work + BINS));
+  } else {
+    build_table(palette, gun_bits, (uint8_t *)p->memory.work);
+  }
+  if (p->profile != NULL) {
+    p->profile->table = since(p->profile, t0);
+  }
+  p->lines_fn = lines_fn;
+  p->lines_ctx = lines_ctx;
+  p->pass = 2;
+  pass_scaler(p);
 }

@@ -125,12 +125,19 @@ typedef struct {
   int mb_cols;
   int mb_rows;
   int stride;  // 16 * mb_cols
+  int picture_rate;  // the header's code: 4 is 30000 / 1001 a second
   uint8_t intra_q[64];      // natural order
   uint8_t non_intra_q[64];  // natural order
 
   // Picture.
   int picture_type;
   int temporal_reference;
+  // The picture's place in display order, from 0 at the stream's first:
+  // its group's start plus its temporal reference. Decode order differs:
+  // a reference picture comes before the B pictures shown ahead of it.
+  uint32_t display_index;
+  uint32_t group_start;     // display index of the group's first picture
+  uint32_t group_pictures;  // pictures of the group seen so far
   int forward_f_code;
   bool full_pel_forward;
 
@@ -151,7 +158,9 @@ typedef struct {
   int8_t ref_row[MPEG1_MAX_MB_ROWS];
   int8_t new_row[MPEG1_MAX_MB_ROWS];
   bool have_reference;
-  uint8_t own_row[MPEG1_SLOT_BYTES];
+  // Word-aligned: with a frame store it can be one of the store's rows,
+  // whose spare ones the converter works in with 16- and 32-bit accesses.
+  _Alignas(4) uint8_t own_row[MPEG1_SLOT_BYTES];
   // A macroblock's coefficients, parsed first and transformed together.
   // Word-aligned: the RP's inverse DCT reads two coefficients a word.
   _Alignas(4) int16_t block[6][64];
@@ -183,5 +192,17 @@ int mpeg1_decode_picture(mpeg1_t *m, mpeg1_row_fn row, void *ctx);
 
 // Skips the rest of the current picture without decoding it.
 void mpeg1_skip_picture(mpeg1_t *m);
+
+// With a frame store, between a picture's decode and the next one's: the
+// store's rows that hold no part of the picture (two at least: the store
+// has mb_rows + 2), up to `max` of them. Returns how many; the caller may
+// use them until the next picture's decode starts.
+int mpeg1_spare_rows(const mpeg1_t *m, uint8_t **rows, int max);
+
+// With a frame store, after a picture was decoded: its macroblock row
+// `mb_row` as the row callback had it (the stride is m->stride), until the
+// next picture's decode starts. False without a reference.
+bool mpeg1_reference_row(const mpeg1_t *m, int mb_row, const uint8_t **y,
+                         const uint8_t **cb, const uint8_t **cr);
 
 #endif  // MPEG1_VIDEO_H

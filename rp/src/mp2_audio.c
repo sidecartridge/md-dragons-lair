@@ -80,7 +80,10 @@ static uint32_t read_frame(mp2_t *a) {
     for (uint32_t i = 4; i < len; i++) {
       int c = next_byte(a);
       if (c < 0) {
-        return 0;  // a frame cut short ends the stream
+        // A frame cut short by the stream's end: the rest as zeros, as
+        // ffmpeg's decoder takes it (its last samples silent).
+        memset(a->frame + i, 0, len - i);
+        break;
       }
       a->frame[i] = (uint8_t)c;
     }

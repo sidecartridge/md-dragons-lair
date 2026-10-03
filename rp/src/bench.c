@@ -22,6 +22,8 @@
 #include "cart_shared.h"
 #include "constants.h"
 #include "audio.h"
+#include "convjob.h"
+#include "fb_blit.h"
 #include "iso9660.h"
 #include "mp2_audio.h"
 #include "mpeg1_video.h"
@@ -332,7 +334,8 @@ static void bench_test_slice(void) {
 // the card's clock as it is created, then rewritten in place (as a reused
 // store would be) at that clock and at BENCH_FAST_KHZ, then read back and
 // deleted. Each pass ends with f_sync(), counted in its time. Results to the
-// console; the data is whatever fb_chunked_buffer holds.
+// console; the data is whatever fb_chunked_buffer holds. The chunk can be
+// set (a multiple of 512 up to 32 KB), for the rate of smaller writes.
 
 #define WRITE_PATH BENCH_FOLDER "/BENCH.TMP"
 #define WRITE_BYTES (2u * 1024u * 1024u)
@@ -346,6 +349,7 @@ static struct {
   bool active;
   int pass;
   FIL f;
+  uint32_t chunk;
   uint32_t done;
   uint64_t us;
 } s_write;
@@ -372,10 +376,13 @@ static FRESULT write_start_pass(int pass) {
   return f_lseek(&s_write.f, 0);
 }
 
-static void write_start(void) {
+static void write_start(uint32_t chunk) {
   if (!benchResults.sd_ok || s_write.active || s_test.running) {
     return;
   }
+  s_write.chunk =
+      (chunk >= 512u && chunk <= WRITE_CHUNK && chunk % 512u == 0) ? chunk
+                                                                   : WRITE_CHUNK;
   s_write.active = true;
   FRESULT fr = write_start_pass(0);
   if (fr != FR_OK) {
@@ -391,13 +398,14 @@ static void write_slice(void) {
     UINT n = 0;
     uint32_t t0 = time_us_32();
     if (s_write.done < WRITE_BYTES) {
-      fr = reading ? f_read(&s_write.f, fb_chunked_buffer, WRITE_CHUNK, &n)
-                   : f_write(&s_write.f, fb_chunked_buffer, WRITE_CHUNK, &n);
+      fr = reading
+               ? f_read(&s_write.f, fb_chunked_buffer, s_write.chunk, &n)
+               : f_write(&s_write.f, fb_chunked_buffer, s_write.chunk, &n);
     } else if (!reading) {
       fr = f_sync(&s_write.f);
     }
     s_write.us += time_us_32() - t0;
-    if (fr != FR_OK || (s_write.done < WRITE_BYTES && n != WRITE_CHUNK)) {
+    if (fr != FR_OK || (s_write.done < WRITE_BYTES && n != s_write.chunk)) {
       write_end(fr != FR_OK ? fr : FR_DISK_ERR);
       return;
     }
@@ -409,7 +417,7 @@ static void write_slice(void) {
     DPRINTF("Write test: %lu bytes %s in %lu B chunks at %lu Hz: %llu us, "
             "%lu KB/s\n",
             (unsigned long)s_write.done, write_pass_names[s_write.pass],
-            (unsigned long)WRITE_CHUNK,
+            (unsigned long)s_write.chunk,
             (unsigned long)(spi != NULL ? spi_get_baudrate(spi) : 0),
             (unsigned long long)s_write.us,
             (unsigned long)(s_write.us ? (uint64_t)s_write.done * 1000000u /
@@ -1398,6 +1406,322 @@ static void sound_slice(void) {
   }
 }
 
+// --- Conversion -----------------------------------------------------------------
+//
+// A scene clip converted on the cartridge into the app's clip file
+// (convjob.h), BENCH_FOLDER/<clip>.DLC, for the palette of the machine
+// plugged in (3 bits a gun for an ST, 4 for an STE, a TT or a Falcon). The
+// frame store takes the in-place test's 17 rows; the converter's other
+// buffers go where those leave room: the scaler's chroma ring and the
+// sound after the rows in fb_planar_scratch, the scaled luma lines and the
+// MP2 samples after the rows in the cartridge window's framebuffer, the MP2
+// decoder after its row in APP_FREE, the writer and the sound's
+// demultiplexer after the rows in fb_chunked_buffer. The ST keeps the screen
+// shown when the conversion started; its bar fills by changing the palette
+// alone.
+
+#define CONV_SEGMENTS 9  // the bar's segments: colours 7 to 15
+#define CONV_FIRST_SEGMENT 7
+#define ALIGN4(n) (((n) + 3u) & ~3u)
+
+_Static_assert(3 * MPEG1_SLOT_BYTES + PICTURE16_RING_C_BYTES +
+                       CONVJOB_SOUND_BYTES <=
+                   CART_FRAMEBUFFER_SIZE,
+               "fb_planar_scratch: 3 rows, the chroma ring and the sound");
+_Static_assert(3 * MPEG1_SLOT_BYTES + PICTURE16_LINES_Y_BYTES +
+                       MP2_FRAME_SAMPLES * sizeof(int16_t) <=
+                   CART_FRAMEBUFFER_SIZE,
+               "the window's framebuffer: 3 rows, the luma lines, MP2's");
+_Static_assert(CART_APP_FREE_OFFSET + MPEG1_SLOT_BYTES + sizeof(mp2_t) <=
+                   CART_FRAMEBUFFER_OFFSET,
+               "APP_FREE: a row and the MP2 decoder");
+_Static_assert(7 * MPEG1_SLOT_BYTES + ALIGN4(sizeof(clip_writer_t)) +
+                       sizeof(mpeg_ps_t) <=
+                   320 * 200,
+               "fb_chunked_buffer: 7 rows, the writer and a demultiplexer");
+
+static struct {
+  bool active;
+  bool done;
+  int clip_index;
+  char clip[16];
+  char out_path[32];
+  int gun_bits;
+  convjob_t *job;     // on the heap while it runs
+  uint8_t *rows;      // and two of the frame store's rows, in one block:
+                      // newlib grows the heap in 4 KB steps from each
+                      // request, and two of 8.4 KB take 24 KB
+  int lit;  // segments lit
+  int result;
+} s_cv;
+
+// The last conversion, readable over SWD as well as on the screen.
+typedef struct {
+  int result;
+  uint32_t gun_bits;
+  uint32_t frames;
+  uint32_t pictures;
+  uint32_t keys;  // in the index
+  uint32_t bytes;
+  uint32_t source_bytes;
+  uint32_t source_crc;
+  uint32_t file_crc;
+  uint32_t total_ms;
+  uint32_t read_ms;
+  uint32_t decode_ms;
+  uint32_t convert_ms;  // what the others leave: scaling, histogram, ...
+  uint32_t sound_ms;
+  uint32_t encode_ms;
+  uint32_t write_ms;
+  uint32_t histogram_ms;  // of the conversion, from the cycle counter
+  uint32_t palette_ms;
+  uint32_t dither_ms;
+} conv_results_t;
+
+__attribute__((used)) conv_results_t convResults;
+
+static const uint16_t *conv_palette(int lit) {
+  static uint16_t words[16];
+  memcpy(words, bench_palette, sizeof(words));
+  for (int s = 0; s < CONV_SEGMENTS; s++) {
+    words[CONV_FIRST_SEGMENT + s] =
+        s < lit ? PALETTE_RGB(2, 7, 2) : PALETTE_RGB(1, 1, 2);
+  }
+  return words;
+}
+
+static void conv_draw(void) {
+  fb_chunked_clear(C_BACK);
+  font_set_font(&font8x8);
+  text(0, 0, C_TITLE, "CONVERTING A CLIP ON THE CARTRIDGE");
+  rule(1);
+  textf(0, 3, C_TEXT, "CLIP    %s", s_cv.clip);
+  textf(0, 4, C_TEXT, "INTO    %s", s_cv.out_path);
+  textf(0, 5, C_TEXT, "FOR     %s",
+        s_cv.gun_bits == 4 ? "AN STE (4,096 COLOURS)" : "AN ST (512 COLOURS)");
+  for (int s = 0; s < CONV_SEGMENTS; s++) {
+    fb_fill_rect(16 + s * 32, 80, 30, 16, CONV_FIRST_SEGMENT + s);
+  }
+  if (!s_cv.done) {
+    text(0, 14, C_DIM, "THE SCREEN STAYS AS IT IS: THE BAR");
+    text(0, 15, C_DIM, "FILLS AS THE CLIP IS READ");
+    text(0, 24, C_DIM, "SPACE: STOP");
+    return;
+  }
+  const conv_results_t *r = &convResults;
+  if (r->result != 0) {
+    textf(0, 14, C_BAD, "STOPPED: %d", r->result);
+  } else {
+    textf(0, 14, C_GOOD, "DONE    %lu FRAMES, %lu PICTURES",
+          (unsigned long)r->frames, (unsigned long)r->pictures);
+    textf(0, 15, C_TEXT, "        %lu INDEXED, %lu BYTES",
+          (unsigned long)r->keys, (unsigned long)r->bytes);
+    uint32_t clip_ms = r->frames * 40u;
+    textf(0, 16, C_VALUE, "TIME    %lu.%lu S, %lu.%02lu X THE CLIP",
+          (unsigned long)(r->total_ms / 1000u),
+          (unsigned long)(r->total_ms / 100u % 10u),
+          (unsigned long)(clip_ms ? r->total_ms / clip_ms : 0),
+          (unsigned long)(clip_ms ? r->total_ms * 100u / clip_ms % 100u : 0));
+    textf(0, 18, C_TEXT, "READ    %6lu MS DECODE  %6lu MS",
+          (unsigned long)r->read_ms, (unsigned long)r->decode_ms);
+    textf(0, 19, C_TEXT, "CONVERT %6lu MS SOUND   %6lu MS",
+          (unsigned long)r->convert_ms, (unsigned long)r->sound_ms);
+    textf(0, 20, C_TEXT, "ENCODE  %6lu MS WRITE   %6lu MS",
+          (unsigned long)r->encode_ms, (unsigned long)r->write_ms);
+    textf(0, 21, C_DIM, "  HIST  %6lu MS PALETTE %6lu MS",
+          (unsigned long)r->histogram_ms, (unsigned long)r->palette_ms);
+    textf(0, 22, C_DIM, "  DITHER%6lu MS", (unsigned long)r->dither_ms);
+  }
+  text(0, 24, C_DIM, "SPACE: BACK");
+}
+
+static void conv_release_heap(void) {
+  free(s_cv.rows);
+  s_cv.rows = NULL;
+  free(s_cv.job);
+  s_cv.job = NULL;
+}
+
+static void conv_finish(int result) {
+  s_cv.done = true;
+  s_cv.result = result;
+  conv_results_t *r = &convResults;
+  memset(r, 0, sizeof(*r));
+  r->result = result;
+  r->gun_bits = (uint32_t)s_cv.gun_bits;
+  if (s_cv.job == NULL) {
+    conv_release_heap();
+    palette_set(conv_palette(s_cv.lit));
+    s_dirty = true;
+    return;
+  }
+  const convjob_times_t *t = &s_cv.job->times;
+  const clip_header_t *h = &s_cv.job->m.writer->header;
+  r->frames = h->frames;
+  r->pictures = s_cv.job->pictures;
+  r->keys = h->index_count;
+  r->bytes = s_cv.job->m.writer->offset;
+  r->source_bytes = h->source_bytes;
+  r->source_crc = h->source_crc;
+  r->file_crc = h->crc;
+  r->total_ms = (uint32_t)(t->total / 1000u);
+  r->read_ms = (uint32_t)(t->read / 1000u);
+  r->decode_ms = (uint32_t)(t->decode / 1000u);
+  r->sound_ms = (uint32_t)(t->sound / 1000u);
+  r->encode_ms = (uint32_t)(t->encode / 1000u);
+  r->write_ms = (uint32_t)(t->write / 1000u);
+  r->convert_ms = (uint32_t)((t->total - t->read - t->decode - t->sound -
+                              t->encode - t->write) /
+                             1000u);
+  r->histogram_ms = (uint32_t)(t->histogram_cycles / CYCLES_PER_US / 1000u);
+  r->palette_ms = (uint32_t)(t->palette_cycles / CYCLES_PER_US / 1000u);
+  r->dither_ms = (uint32_t)(t->dither_cycles / CYCLES_PER_US / 1000u);
+  conv_release_heap();
+  DPRINTF("Convert %s into %s: result %d; %lu frames, %lu pictures, %lu "
+          "indexed, %lu bytes; source %lu bytes CRC-32 %08lX; file CRC-32 "
+          "%08lX; %lu ms (read %lu, decode %lu, convert %lu, sound %lu, "
+          "encode %lu, write %lu; histogram %lu, palette %lu, dither %lu)\n",
+          s_cv.clip, s_cv.out_path, result, (unsigned long)r->frames,
+          (unsigned long)r->pictures, (unsigned long)r->keys,
+          (unsigned long)r->bytes, (unsigned long)r->source_bytes,
+          (unsigned long)r->source_crc, (unsigned long)r->file_crc,
+          (unsigned long)r->total_ms, (unsigned long)r->read_ms,
+          (unsigned long)r->decode_ms, (unsigned long)r->convert_ms,
+          (unsigned long)r->sound_ms, (unsigned long)r->encode_ms,
+          (unsigned long)r->write_ms,
+          (unsigned long)r->histogram_ms, (unsigned long)r->palette_ms,
+          (unsigned long)r->dither_ms);
+  palette_set(conv_palette(result == 0 ? CONV_SEGMENTS : s_cv.lit));
+  s_dirty = true;
+}
+
+// `gun_bits` 0: the machine plugged in's.
+static void conv_start(int index, int gun_bits) {
+  if (!benchResults.image_found || s_test.running || s_test.pending ||
+      s_show.active || s_ip.active || s_cv.active) {
+    return;
+  }
+  if (s_sound.active) {
+    sound_stop();  // its decoder is on the heap
+  }
+  if (index < 0) {
+    index = (int)benchResults.clips - 1;
+  }
+  if (index >= (int)benchResults.clips) {
+    index = 0;
+  }
+  iso9660_entry_t entry;
+  if (!show_find_clip(index, &entry)) {
+    return;
+  }
+  memset(&s_cv, 0, sizeof(s_cv));
+  s_cv.active = true;
+  s_cv.clip_index = index;
+  snprintf(s_cv.clip, sizeof(s_cv.clip), "%s", entry.name);
+  char base[16];
+  snprintf(base, sizeof(base), "%s", entry.name);
+  char *dot = strchr(base, '.');
+  if (dot != NULL) {
+    *dot = '\0';
+  }
+  snprintf(s_cv.out_path, sizeof(s_cv.out_path), "%s/%s.DLC", BENCH_FOLDER,
+           base);
+  // The machine plugged in: an ST's palette has 3 bits a gun.
+  s_cv.gun_bits = gun_bits != 0                        ? gun_bits
+                  : (st_session_machine() >> 4) == 0 ? 3
+                                                       : 4;
+
+  // The screen, shown before its memory goes to the converter.
+  conv_draw();
+  palette_set(conv_palette(0));
+  fb_publish();
+  fb_wait_shown(IP_SHOWN_TIMEOUT_US);
+
+  // The small one first: it fits the heap's free block from the boot.
+  s_cv.job = malloc(sizeof(convjob_t));
+  s_cv.rows = malloc(2 * MPEG1_SLOT_BYTES);
+  if (s_cv.job == NULL || s_cv.rows == NULL) {
+    conv_release_heap();
+    conv_finish(-100);
+    return;
+  }
+  uint8_t *window = (uint8_t *)__rom_in_ram_start__;
+  uint8_t *cart_fb = window + CART_FRAMEBUFFER_OFFSET;
+  uint8_t *app_free = window + CART_APP_FREE_OFFSET;
+  uint8_t *scratch = fb_chunked_scratch();
+  convjob_memory_t m;
+  memset(&m, 0, sizeof(m));
+  int n = 0;
+  for (int i = 0; i < 7; i++) {
+    m.rows[n++] = fb_chunked_buffer + i * MPEG1_SLOT_BYTES;
+  }
+  for (int i = 0; i < 3; i++) {
+    m.rows[n++] = scratch + i * MPEG1_SLOT_BYTES;
+  }
+  for (int i = 0; i < 3; i++) {
+    m.rows[n++] = cart_fb + i * MPEG1_SLOT_BYTES;
+  }
+  m.rows[n++] = app_free;
+  m.rows[n++] = s_dec.own_row;
+  m.rows[n++] = s_cv.rows;
+  m.rows[n++] = s_cv.rows + MPEG1_SLOT_BYTES;
+  m.row_count = n;
+  m.ring_c = scratch + 3 * MPEG1_SLOT_BYTES;
+  m.sound = (int8_t *)(m.ring_c + PICTURE16_RING_C_BYTES);
+  m.lines_y = cart_fb + 3 * MPEG1_SLOT_BYTES;
+  m.pcm = (int16_t *)(m.lines_y + PICTURE16_LINES_Y_BYTES);
+  m.mp2 = (mp2_t *)(app_free + MPEG1_SLOT_BYTES);
+  m.writer = (clip_writer_t *)(fb_chunked_buffer + 7 * MPEG1_SLOT_BYTES);
+  m.audio =
+      (mpeg_ps_t *)((uint8_t *)m.writer + ALIGN4(sizeof(clip_writer_t)));
+  m.video = &s_ps;
+  m.dec = &s_dec;
+  bench_start_cycles();
+  DPRINTF("Convert %s into %s for %s\n", s_cv.clip, s_cv.out_path,
+          s_cv.gun_bits == 4 ? "an STE" : "an ST");
+  int r = convjob_start(s_cv.job, &m, &s_iso, &entry, s_cv.out_path,
+                        s_cv.gun_bits, bench_run2, bench_cycles);
+  if (r < 0) {
+    conv_finish(r);
+  }
+}
+
+// One picture a call: the main loop runs between them.
+static void conv_frame(void) {
+  if (s_cv.done) {
+    if (s_dirty) {
+      conv_draw();
+      s_dirty = false;
+    }
+    fb_publish();
+    return;
+  }
+  int r = convjob_step(s_cv.job);
+  uint32_t size = s_cv.job->video_file.size;
+  int lit = size ? (int)((uint64_t)s_cv.job->video_file.pos * CONV_SEGMENTS /
+                         size)
+                 : 0;
+  if (lit != s_cv.lit) {
+    s_cv.lit = lit;
+    palette_set(conv_palette(lit));
+  }
+  if (r <= 0) {
+    conv_finish(r);
+  }
+}
+
+// Back to the bench; a conversion still running is stopped first, its clip
+// file closed and left incomplete.
+static void conv_stop(void) {
+  if (!s_cv.done && s_cv.job != NULL) {
+    convjob_abort(s_cv.job);
+  }
+  conv_release_heap();
+  s_cv.active = false;
+  palette_set(bench_palette);
+  s_dirty = true;
+}
+
 // --- Public -----------------------------------------------------------------
 
 void bench_init(void) {
@@ -1435,8 +1759,24 @@ void bench_start_sd(void) {
 }
 
 void bench_restart(void) {
-  palette_set(s_show.active ? show_palette() : bench_palette);
+  // A conversion still running is stopped: its screen cannot be drawn again
+  // (it works in the framebuffers' memory), and the ST shows the bench live.
+  if (s_cv.active && !s_cv.done) {
+    conv_stop();
+  }
+  palette_set(s_cv.active   ? conv_palette(s_cv.lit)
+              : s_show.active ? show_palette()
+                              : bench_palette);
   s_dirty = true;
+}
+
+void bench_stop_card_work(void) {
+  if (s_cv.active && !s_cv.done && s_cv.job != NULL) {
+    convjob_abort(s_cv.job);  // the clip file closed: synced, the card idle
+  }
+  if (s_write.active) {
+    write_end(FR_OK);
+  }
 }
 
 void bench_handle_key(const ikbd_key_event_t *key) {
@@ -1446,6 +1786,12 @@ void bench_handle_key(const ikbd_key_event_t *key) {
   if (s_ip.active) {
     if (key->scancode == 0x39 && s_ip.done) {  // space: back to the bench
       ip_stop();
+    }
+    return;
+  }
+  if (s_cv.active) {
+    if (key->scancode == 0x39) {  // space: stop, or back to the bench
+      conv_stop();
     }
     return;
   }
@@ -1550,6 +1896,9 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     case 0x1E:  // A: the first scene clip's sound, played
       sound_start(0, true);
       break;
+    case 0x2E:  // C: the first scene clip converted into a clip file
+      conv_start(0, 0);
+      break;
     case 0x2D:  // X: back to Booster (the ST resets into it)
       st_session_return_to_booster();
       break;
@@ -1572,6 +1921,10 @@ void bench_frame(void) {
   }
   if (s_ip.active) {
     ip_frame();
+    return;
+  }
+  if (s_cv.active) {
+    conv_frame();
     return;
   }
   if (s_sound.active) {
@@ -1618,7 +1971,17 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
       }
       return 1;
     case DEVHOOKS_APP_WRITE_TEST:
-      write_start();
+      write_start(payload_size >= 2u ? payload[0] * 512u : 0u);
+      return 1;
+    case DEVHOOKS_APP_CONVERT:
+      if (payload_size >= 2u) {
+        conv_start((int)payload[0],
+                   payload_size >= 4u && (payload[1] == 3 || payload[1] == 4)
+                       ? (int)payload[1]
+                       : 0);
+      } else if (s_cv.active) {
+        conv_stop();
+      }
       return 1;
     case DEVHOOKS_APP_SOUND:
       if (payload_size >= 2u) {

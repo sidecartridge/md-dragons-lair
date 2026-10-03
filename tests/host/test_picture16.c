@@ -7,7 +7,9 @@
  * keeps only 16 lines in its column-major ring; its two cores' halves run
  * one after the other, in both orders, so that a half reading what the
  * other writes fails. Then the conversion of the scaled picture, on one
- * core and on two, every option: the same indices and palette. On the RP
+ * core and on two, every option: the same indices and palette. And the two
+ * passes, which keep only a few scaled lines: the same indices and palette
+ * as the conversion of the whole scaled picture. On the RP
  * the inner loops are Thumb assembly (picture16_asm.S) with the C's
  * arithmetic; here they are the C. */
 
@@ -175,6 +177,83 @@ static void check_convert(void) {
   }
 }
 
+// The two passes, the source fed a macroblock row at a time twice: the
+// same palette and indices as picture16_convert() on the whole scaled
+// picture, whatever the options and the cores.
+static uint8_t two_pass_out[OUT_H][OUT_W];
+
+static void take_lines(void *ctx, int line, const uint8_t *indices,
+                       int width) {
+  (void)ctx;
+  CHECK_EQ(width, OUT_W);
+  CHECK(line >= 0 && line + 1 < OUT_H);
+  memcpy(&two_pass_out[line][0], indices, 2u * OUT_W);
+}
+
+static void feed(picture16_passes_t *p) {
+  enum { STRIDE = SRC_W };
+  static uint8_t slot[STRIDE * 16 + STRIDE * 8];
+  for (int r = 0; r < SRC_H / 16; r++) {
+    memset(slot, 0x5A, sizeof(slot));
+    memcpy(slot, &src_y[r * 16][0], STRIDE * 16);
+    uint8_t *cb = slot + STRIDE * 16;
+    uint8_t *cr = cb + STRIDE / 2 * 8;
+    memcpy(cb, &src_cb[r * 8][0], STRIDE / 2 * 8);
+    memcpy(cr, &src_cr[r * 8][0], STRIDE / 2 * 8);
+    picture16_passes_mb_row(p, r, slot, cb, cr, STRIDE);
+  }
+}
+
+static void check_two_pass(const char *what) {
+  static uint8_t work[PICTURE16_WORK_BYTES], work2[PICTURE16_WORK_BYTES];
+  static uint8_t one[OUT_H][OUT_W];
+  static _Alignas(4) uint8_t lines[PICTURE16_LINES_BYTES];
+  scale(NULL);  // the whole scaled picture, the reference's input
+  picture16_run2_fn runs[3] = {NULL, run_ab, run_ba};
+  int diffs = 0;
+  for (int bits = 3; bits <= 4; bits++) {
+    for (int weighting = 0; weighting <= 1; weighting++) {
+      for (int d = 0; d < PICTURE16_DITHERS; d++) {
+        picture16_options_t o1 = {bits, weighting, d, NULL, NULL};
+        picture16_palette_t p1;
+        memcpy(one, out_y, sizeof(one));
+        picture16_convert(&one[0][0], &out_cb[0][0], &out_cr[0][0], OUT_W,
+                          OUT_H, work, &o1, &p1, NULL);
+        for (int i = 0; i < 3; i++) {
+          picture16_options_t o2 = {bits, weighting, d, runs[i],
+                                    runs[i] != NULL ? work2 : NULL};
+          picture16_passes_t p;
+          picture16_palette_t p2;
+          memset(two_pass_out, 0xEE, sizeof(two_pass_out));
+          memset(ring, 0xA5, sizeof(ring));
+          memset(lines, 0xA5, sizeof(lines));
+          // The memory in pieces, from separate buffers.
+          picture16_memory_t mem = {ring, ring + PICTURE16_RING_Y_BYTES,
+                                    lines, lines + PICTURE16_LINES_Y_BYTES,
+                                    work};
+          CHECK(picture16_passes_init(&p, SRC_W, SRC_H, &mem, &o2, NULL));
+          feed(&p);
+          picture16_passes_choose(&p, &p2);
+          picture16_passes_dither(&p, &p2, take_lines, NULL);
+          feed(&p);
+          int diff = count_diff(one, two_pass_out, sizeof(one));
+          diffs += diff != 0;
+          CHECK_EQ(diff, 0);
+          CHECK_EQ(p1.colours, p2.colours);
+          CHECK(memcmp(p1.rgb444, p2.rgb444, sizeof(p1.rgb444)) == 0);
+        }
+      }
+    }
+  }
+  if (diffs != 0) {
+    fprintf(stderr, "%s: %d two-pass conversions differ\n", what, diffs);
+  }
+  picture16_passes_t p;
+  picture16_memory_t mem = {ring, ring + PICTURE16_RING_Y_BYTES, lines,
+                            lines + PICTURE16_LINES_Y_BYTES, work};
+  CHECK(!picture16_passes_init(&p, 320, 240, &mem, NULL, NULL));
+}
+
 static uint32_t rng = 12345;
 static uint8_t next_byte(void) {
   rng = rng * 1103515245u + 12345u;
@@ -195,6 +274,7 @@ int main(void) {
     }
   }
   check_picture("noise");
+  check_two_pass("noise");
 
   // Hard edges, 0 against 255, both ways: the lobes overshoot past both
   // ends, so the clamp works.
@@ -210,6 +290,7 @@ int main(void) {
     }
   }
   check_picture("edges");
+  check_two_pass("edges");
 
   // A picture where every line and column differs from its neighbours'
   // position (catches a line read from the wrong ring slot).
@@ -225,6 +306,7 @@ int main(void) {
     }
   }
   check_picture("gradients");
+  check_two_pass("gradients");
   check_convert();
 
   TEST_END();

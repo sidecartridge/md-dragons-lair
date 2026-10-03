@@ -1,7 +1,7 @@
 # Host test data
 
-Synthetic streams for `test_mp2_audio.c`, made with ffmpeg 8.1 (sine tones; nothing from
-the game). From this folder:
+Synthetic streams for `test_mp2_audio.c`, `test_cadence.c` and `test_convert.c`, made with ffmpeg
+8.1 (sine tones and test patterns; nothing from the game). From this folder:
 
 ```sh
 # 1 kHz left, 3 kHz right, each at half of full scale, 0.5 s, MP2 in an MPEG-1 program stream
@@ -24,3 +24,34 @@ done
 The references are another decoder's reading of the same streams, so the test checks the
 firmware's decoder, not the encoder (ffmpeg's encoder leaves its own artifacts on loud pure
 tones: they are in both).
+
+A video clip with B pictures and open groups for `test_cadence.c` and `test_convert.c`, at the
+game's size and picture rate, and the order ffprobe shows its pictures in:
+
+```sh
+ffmpeg -f lavfi -i "testsrc=size=352x240:rate=30000/1001:duration=2" \
+       -c:v mpeg1video -bf 2 -g 15 -q:v 20 -f mpeg ibp_352x240.mpg
+ffprobe -v error -select_streams v:0 -show_frames -show_entries frame=pict_type -of csv=p=0 \
+        ibp_352x240.mpg | cut -c1 | tr -d '\n' > ibp_352x240.types
+```
+
+A still clip for `test_convert.c` (one group, so every picture after the first P picture is the
+same):
+
+```sh
+ffmpeg -f lavfi -i "smptebars=size=352x240:rate=30000/1001:duration=1" \
+       -c:v mpeg1video -bf 2 -g 30 -q:v 8 -f mpeg still_352x240.mpg
+```
+
+A small clip for `test_mpeg1_video.c` whose picture moves at every edge (a 64x48 window
+swinging over a test pattern, slow enough for the decoder's 16-pixel vectors), and ffmpeg's
+decoding of its I and P pictures as the reference:
+
+```sh
+ffmpeg -f lavfi -i "testsrc2=size=176x144:rate=30000/1001:duration=2" \
+       -vf "crop=64:48:x='56+24*sin(n/6)':y='48+18*cos(n/5)'" \
+       -c:v mpeg1video -bf 2 -g 12 -q:v 2 -me_range 12 -sc_threshold 1000000000 \
+       -f mpeg edge_64x48.mpg
+ffmpeg -i edge_64x48.mpg -vf "select='not(eq(pict_type\,B))'" -fps_mode passthrough \
+       -f rawvideo -pix_fmt yuv420p edge_64x48.ref.yuv
+```
