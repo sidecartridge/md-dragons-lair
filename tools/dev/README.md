@@ -177,8 +177,8 @@ runs the command defined as `DEVHOOKS_APP_<NAME>` in `rp/src/include`; the bench
 - `sound N [1]`: scene clip N's sound decoded and timed (1: played; no word: stopped).
 - `write_test`: the card's write rate (a 2 MB scratch file in the folder, deleted after).
 
-The SD card starts after the ST's hello or 3 s: after a flash, wait for the console's `Root:` line
-before sending one.
+The SD card starts before the main loop: after a flash, wait for the console's `Root:` line before
+sending one.
 
 An app adds its own the same way: a `DEVHOOKS_APP_<NAME>` define and a handler set with
 `devhooks_setAppHandler()`.

@@ -74,9 +74,7 @@ static const uint16_t bench_palette[16] = {
 
 // What the bench found, readable over SWD as well as on the screen.
 typedef struct {
-  bool sd_started;
-  uint32_t sd_start_ms;   // after the RP started
-  uint32_t sd_start_hellos;  // ST hellos seen when it started: 0, timeout
+  uint32_t sd_start_ms;   // after bench_init()
   bool sd_ok;
   int sd_result;       // sdcard_initFilesystem()'s
   bool image_found;
@@ -563,9 +561,7 @@ static void bench_draw(void) {
   text(31, 0, C_DIM, RELEASE_VERSION);
   rule(1);
 
-  if (!benchResults.sd_started) {
-    text(0, 2, C_TEXT, "WAITING FOR THE ST, THEN THE SD CARD");
-  } else if (benchResults.sd_result == SDCARD_CREATE_FOLDER_ERROR) {
+  if (benchResults.sd_result == SDCARD_CREATE_FOLDER_ERROR) {
     text(0, 2, C_BAD, "CANNOT CREATE THE FOLDER " BENCH_FOLDER);
   } else if (!benchResults.sd_ok) {
     text(0, 2, C_BAD, "NO SD CARD");
@@ -607,8 +603,8 @@ static void bench_draw(void) {
   rule(23);
   if (!draw_sound_line(24)) {
     text(0, 24, C_DIM,
-         benchResults.image_found ? "UP/DN R READ I/P PICTS A SOUND ESC GEM"
-                                  : "ESC GEM");
+         benchResults.image_found ? "R READ I/P PICTS A SND X BOOSTER ESC GEM"
+                                  : "X BOOSTER  ESC GEM");
   }
 }
 
@@ -1411,16 +1407,12 @@ void bench_init(void) {
   s_dirty = true;
 }
 
-// Mounts the card, finds the image and reads its root directory.
-static void bench_start_sd(void) {
-  benchResults.sd_started = true;
+void bench_start_sd(void) {
   benchResults.sd_start_ms = (time_us_32() - s_boot_us) / 1000u;
-  benchResults.sd_start_hellos = st_session_hellos();
   benchResults.sd_result = sdcard_initFilesystem(&s_fs, BENCH_FOLDER);
   benchResults.sd_ok = benchResults.sd_result == SDCARD_INIT_OK;
-  DPRINTF("SD card started %lu ms after boot (%s): %s\n",
+  DPRINTF("SD card started %lu ms after bench_init: %s\n",
           (unsigned long)benchResults.sd_start_ms,
-          benchResults.sd_start_hellos ? "the ST said hello" : "timeout",
           benchResults.sd_ok ? "mounted" : "unavailable");
   spi_inst_t *spi = bench_spi();
   s_configured_hz = (spi != NULL) ? spi_get_baudrate(spi) : 0;
@@ -1558,17 +1550,15 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     case 0x1E:  // A: the first scene clip's sound, played
       sound_start(0, true);
       break;
+    case 0x2D:  // X: back to Booster (the ST resets into it)
+      st_session_return_to_booster();
+      break;
     default:
       break;
   }
 }
 
 void bench_frame(void) {
-  if (!benchResults.sd_started &&
-      (st_session_hellos() > 0 ||
-       time_us_32() - s_boot_us >= BENCH_SD_WAIT_US)) {
-    bench_start_sd();
-  }
   if (s_test.running && !s_test.redraw) {
     bench_test_slice();
     return;

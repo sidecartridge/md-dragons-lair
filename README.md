@@ -34,10 +34,11 @@ clips in it. The keys:
 | I | the intra pictures of the first scene clip, converted and shown (Left / Right: another clip; T: the timings; C: 512 or 4,096 colours; D: the dither; W: the palette's weighting; Space: back) |
 | P | the first scene clip's I and P pictures decoded in place on the cartridge, timed and checked by CRC-32 (Space: back) |
 | A | the first scene clip's sound, decoded and played (+ / -: the volume in 3 dB steps; Left / Right: another clip; Space: stop) |
+| X | back to Booster, the Multi-device's menu (the ST resets into it) |
 | Esc | back to GEM |
 
-The cartridge's SELECT button works as in every Multi-device app: a short press restarts the
-cartridge (then reset the ST), held at power-on it starts Booster, the Multi-device's menu.
+The cartridge's SELECT button: a short press restarts the cartridge (then reset the ST); held for
+10 s it is a factory reset.
 
 ## Build
 
