@@ -1,10 +1,10 @@
 {
   "uuid": "<APP_UUID>",
-  "name": "APP DEV Template",
-  "description": "Microfirmware Application Template for Atari ST",
+  "name": "Dragon's Lair",
+  "description": "The laserdisc game on the Atari ST, STE and Mega ST(E): its video and sound converted by the cartridge from your own copy of the CD-ROM image on the SD card. Work in progress.",
   "image": "https://placehold.co/256x256/png",
   "tags": [
-    "Sample",
+    "Game"
   ],
   "devices": [
     "ST",
