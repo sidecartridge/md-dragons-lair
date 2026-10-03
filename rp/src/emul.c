@@ -20,21 +20,18 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "aconfig.h"
 #include "audio.h"
+#include "bench.h"
 #include "commemul.h"
 #include "debug.h"
-#include "demo.h"
 #include "devhooks.h"
 #include "fb.h"
-#include "ff.h"
 #include "ikbd.h"
 #include "memfunc.h"
 #include "palette.h"
 #include "pico/stdlib.h"
 #include "reset.h"
 #include "romemul.h"
-#include "sdcard.h"
 #include "select.h"
 #include "st_session.h"
 #include "target_firmware.h"
@@ -122,19 +119,7 @@ void emul_start() {
   // chosen below, after the SD card has had a chance to mount.
   audio_init();
 
-  // SD card -- best-effort. Apps that need persistent storage can
-  // ignore the failure path or treat it as fatal. The folder name is
-  // taken from per-app config (ACONFIG_PARAM_FOLDER) so apps can be
-  // reconfigured from Booster without recompiling.
-  // Static, not on core 0's stack: the FATFS object is about 600 bytes and
-  // f_mount keeps a pointer to it for as long as the card is used.
-  static FATFS fsys;
-  SettingsConfigEntry *folder =
-      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
-  const char *folderName = folder ? folder->value : "/test";
-  if (sdcard_initFilesystem(&fsys, folderName) != SDCARD_INIT_OK) {
-    DPRINTF("SD card unavailable. Continuing without SD.\n");
-  }
+  // The SD card is started by the bench, once the ST has booted (bench.h).
 
   // Cartridge SELECT button, configured in main() (held at power-on it goes
   // to Booster). While the app runs, as md-microfirmware-template: a short
@@ -144,28 +129,20 @@ void emul_start() {
   select_setResetCallback(reset_device);
   select_setLongResetCallback(reset_deviceAndEraseFlash);
 
-  // Bring up the demo dispatcher. demo_dispatcher_init takes
-  // ownership of the ESC key from ikbd.c (ESC now means "back to
-  // menu" inside a demo and "exit to GEM" only when the menu is on
-  // screen) and starts the menu's music (demo_menu_music(): DEMO.YMS
-  // from the SD card, else the built-in jingle; apps play their own with
-  // audio_play_yms_file(), audio_play_loop(), audio_set_pcm_callback()).
-  // The first dispatcher render paints the boot menu over whatever
-  // fb_init left in the framebuffer.
-  demo_dispatcher_init();
+  // The bench screen: the CD-ROM image in BENCH_FOLDER, listed and read
+  // (bench.h). ESC keeps ikbd.c's default: back to GEM.
+  bench_init();
   // Debug builds: host commands over SWD (devhooks.h, tools/dev/swd.py).
-  devhooks_setAppHandler(demo_dispatcher_devhook);
+  devhooks_setAppHandler(bench_devhook);
 
   // Main loop:
   //   1. Drain the ROM3 commemul ring; ikbd_consume_rom3_sample keeps the
   //      IKBD samples (every byte the m68k ACIA interrupt forwarded, the
   //      ST's byte counts, overruns and input mode reports) in order.
   //   2. Decode them: keys, mouse and joysticks (ikbd_pump).
-  //   3. Forward decoded key events to the dispatcher (which routes
-  //      to the menu or the active demo).
-  //   4. Re-render the cart framebuffer via the dispatcher (menu UI
-  //      or active demo's render_frame). The m68k VBL loop in
-  //      userfw.s blits this into an ST screen page once per VBL.
+  //   3. Forward decoded key events to the bench.
+  //   4. Run a slice of the bench's work, or draw and publish its screen.
+  //      The m68k VBL loop in userfw.s blits it into an ST screen page.
   DPRINTF("Entering main loop\n");
   while (true) {
     fb_pump_rom3();  /* drains ROM3 ring -> IKBD demux + VBL frame-sync */
@@ -175,15 +152,15 @@ void emul_start() {
 
     /* The ST rebooted: start its session over (see st_session.h). */
     if (st_session_consume_boot()) {
-      demo_dispatcher_restart();
+      bench_restart();
     }
 
     ikbd_key_event_t k;
     while (ikbd_pop_key(&k)) {
-      demo_dispatcher_handle_key(&k);
+      bench_handle_key(&k);
     }
 
-    demo_dispatcher_render_frame();
+    bench_frame();
     audio_render_frame();
   }
 }

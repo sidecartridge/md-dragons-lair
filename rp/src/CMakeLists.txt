@@ -122,7 +122,9 @@ pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/commemul.pio)
 target_sources(${PROJECT_NAME} PRIVATE
         aconfig.c
         audio.c
+        bench.c
         commemul.c
+        crc32.c
         emul.c
         fb.c
         fb_blit.c
@@ -134,17 +136,14 @@ target_sources(${PROJECT_NAME} PRIVATE
         ikbd.c
         ikbd_demux.c
         hw_config.c
+        iso9660.c
+        mp2_audio.c
+        mpeg1_idct_asm.S
+        mpeg1_video.c
+        mpeg_ps.c
         palette.c
-        demo_menu.c
-        demo_parallax.c
-        demo_3d.c
-        demo_sprites.c
-        demo_cojorotozoom.c
-        demo_input.c
-        demo_games.c
-        game_kit.c
-        game_arena.c
-        game_zap.c
+        picture16.c
+        picture16_asm.S
         reset.c
         romemul.c
         sdcard.c
@@ -159,7 +158,6 @@ pico_add_extra_outputs(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LINK_LIBRARIES}        # External or additional libraries passed as variables
     hardware_flash           # Flash memory access
-    hardware_interp          # SIO interpolators (cojorotozoom texel addressing)
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico                # FATFS library
     pico_stdlib              # Core functionality
     pico_multicore          # Multicore support

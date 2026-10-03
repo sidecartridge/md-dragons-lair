@@ -63,6 +63,8 @@ extern void fb_c2p_half(uint16_t *dst,
 static uint16_t fb_planar_scratch[CART_FRAMEBUFFER_SIZE / sizeof(uint16_t)]
     __attribute__((aligned(4)));
 
+uint8_t *fb_chunked_scratch(void) { return (uint8_t *)fb_planar_scratch; }
+
 /* Generic Core 1 worker loop (dual-core). Pops a job function
  * pointer + arg off the FIFO, runs it, signals completion. Both the c2p
  * bottom half and the demos' band rendering dispatch through this. The

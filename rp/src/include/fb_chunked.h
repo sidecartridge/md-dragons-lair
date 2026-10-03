@@ -58,6 +58,11 @@ void __not_in_flash_func(fb_core1_wait)(void);
 /* Fill the entire chunked buffer with a single palette index. */
 void fb_chunked_clear(uint8_t color);
 
+/* The publish's 32,000-byte planar scratch (4-byte aligned). fb_publish()
+ * is its only user: between two publishes an app may borrow it, as long as
+ * it does not publish while it holds it. */
+uint8_t *fb_chunked_scratch(void);
+
 /* Bounds-checked single-pixel plot; mostly useful for diagnostics. */
 static inline void fb_chunked_plot(unsigned int x, unsigned int y,
                                    uint8_t color) {

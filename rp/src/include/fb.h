@@ -16,6 +16,7 @@
 #ifndef FB_H
 #define FB_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -115,6 +116,13 @@ void fb_set_copy_mode(uint8_t mode, uint8_t piece);
  *         memcpy). Updated every fb_publish(); stale-by-one is fine
  *         for an on-screen timing readout. */
 uint32_t fb_last_convert_us(void);
+
+/** @brief Waits, draining the ROM3 ring, until the ST has copied the last
+ *         published frame to its screen, or `timeout_us` has passed.
+ *         Afterwards the ST reads the cart framebuffer again only after the
+ *         next fb_publish(), so it may be borrowed as memory until then.
+ *         Returns false on the timeout (no ST running, say). */
+bool fb_wait_shown(uint32_t timeout_us);
 
 #ifdef __cplusplus
 }
