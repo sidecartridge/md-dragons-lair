@@ -2,7 +2,7 @@
 """Worst-case stack depth from GCC -fcallgraph-info=su output (.ci files).
 
 Static call edges only. Indirect calls (the jobs core 1 runs through
-fb_core1_dispatch(), the demo modules' function pointers, the devhooks
+fb_core1_dispatch(), the decoders' and picture16's run2 jobs, the devhooks
 handler, IRQs) are not followed, so stitch them by hand:
 
   # largest application frames

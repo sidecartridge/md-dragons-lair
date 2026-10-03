@@ -25,10 +25,9 @@
  *                         the shifter border colour (no separate
  *                         border register on plain ST).
  *   - idx 15 = black   -- matches `clear-to-0xFF = background`
- *                         used by fb_init() / fb_render_frame().
+ *                         used by fb_init()'s first frame.
  *   - idx 1..14        -- a mid palette of blue / warm / green /
- *                         earth shades intended to cover the
- *                         three demos with a single shared set.
+ *                         earth shades, one general-purpose set.
  */
 
 #ifndef PALETTE_H_INCLUDED

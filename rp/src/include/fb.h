@@ -59,18 +59,6 @@ int fb_init(const struct FB_MODE *mode);
  *         the default TOS low-res palette). */
 void fb_clear(void);
 
-/** @brief Render the static parts of the template's boot UI (centered
- *         title + ESC hint). Called once by fb_init; the dynamic parts
- *         live in fb_render_frame. */
-void fb_render_static(void);
-
-/** @brief Render the dynamic parts of the template's boot UI: erase
- *         and redraw only the frame-counter row and the marquee row.
- *         Static title is left intact so we don't churn the parts of
- *         the FB the m68k is currently reading. Safe to call from the
- *         main loop at any cadence. */
-void fb_render_frame(void);
-
 /** @brief Publish the current chunked buffer to the cart framebuffer,
  *         synchronized to the Atari's 50 Hz VBL, tear-free.
  *

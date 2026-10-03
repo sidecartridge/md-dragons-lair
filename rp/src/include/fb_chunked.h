@@ -50,7 +50,7 @@ void fb_chunked_init(void);
  * so data prepared before dispatch is visible to the job and the job's
  * writes are visible after wait. Each dispatch MUST be paired with one
  * wait before the next dispatch (the c2p in fb_transpose uses this too,
- * so demos must join their own job before fb_publish). */
+ * so an app must join its own job before fb_publish). */
 typedef void (*fb_core1_job_t)(void *arg);
 void __not_in_flash_func(fb_core1_dispatch)(fb_core1_job_t job, void *arg);
 void __not_in_flash_func(fb_core1_wait)(void);
