@@ -1,6 +1,8 @@
 # AGENTS.md — md-dragons-lair Playbook
 
-Welcome to the md-dragons-lair workspace, created from md-framebuffer-template. This is the quick primer so any agent can get productive fast. `CLAUDE.md` is the full reference (architecture, shared-region map, pipelines, tests); where the two disagree, `CLAUDE.md` and the code win.
+Welcome to the md-dragons-lair workspace, created from md-framebuffer-template v1.1.0. This is the quick primer so any agent can get productive fast. `CLAUDE.md` is the full reference (architecture, shared-region map, pipelines, tests); where the two disagree, `CLAUDE.md` and the code win.
+
+The app is Dragon's Lair for the SidecarTridge Multi-device: the RP2040 reads the game's clips (MPEG-1 video, MP2 sound) from the user's own CD-ROM image on the SD card (`/DLAIR`), decodes and converts them to 320×200 in 16 colours, and the ST shows them at 25 fps. For now the firmware is a bench (`rp/src/bench.c`): it lists the image, measures the card, and decodes, shows and plays a clip. The decoders and the converter are plain C with Thumb assembly hot loops (`iso9660.c`, `mpeg_ps.c`, `mpeg1_video.c`, `mp2_audio.c`, `picture16.c`); `tools/dlconv/` runs the same code on a PC.
 
 ## 1. Environment setup (do this before touching the repo)
 - **Host tooling**
@@ -68,6 +70,8 @@ python3 tools/dev/tools_harness.py --build --flash --reset
   - `/pico-sdk`
   - `/pico-extras`
 - To change FatFs configuration, edit `rp/src/ff/ffconf.h`, not the file inside `/fatfs-sdk`.
+- **Nothing from the game is committed**: no clip, picture, sound or image, not even as test data. Host tests use synthetic data (`tests/host/data/`).
+- The WiFi entries in the global settings (`rp/src/gconfig.c`) are Booster's: never remove them, although the app has no radio.
 - **Never add AI-tool attribution** to commits, PR descriptions, code comments, docs, or any other artifact. No `Co-Authored-By: Claude …`, no "Generated with Claude Code / ChatGPT / etc.", no "AI-assisted" notes. Write everything as the human author.
 - Release workflow: a new version starts with `release/vX.Y.Z` branched from `main` (the name is what `version.txt` will contain). Each epic gets its own branch cut from the release branch, `epic/NN-<slug>`, and its pull request targets the release branch, never `main`; it is merged after Diego verifies it on hardware. `main` receives the release branch once, when the version is done, and only then is it tagged. Commit, push and open PRs only when asked.
 - Planning notes (iterations, epics, stories) live in `docs/epics/`, which is gitignored and machine-local. Never name an epic, story, iteration or task in anything committed or pushed — comments, docs, changelog, commit messages, PR descriptions (epic branch names, `epic/NN-<slug>`, are the one exception). Write the information itself, not a pointer to a document the reader cannot open. Release check: `git grep -nIiE "\b(epic|story|iteration)[ -]?[0-9]|docs/epics" -- ':!CLAUDE.md' ':!AGENTS.md' ':!.gitignore'` must come back empty.
