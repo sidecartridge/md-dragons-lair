@@ -1,8 +1,9 @@
 # Set minimum required version of CMake
 #
-# examples/hello_text variant of rp/src/CMakeLists.txt: the five demo_*.c
-# sources and the hardware_interp link (only the demos/menu used the SIO
-# interpolator) are removed. apply.sh copies this over rp/src/CMakeLists.txt.
+# examples/hello_text variant of rp/src/CMakeLists.txt: the demo_*.c and
+# game_*.c sources and the hardware_interp link (only the demos/menu used
+# the SIO interpolator) are removed. apply.sh copies this over
+# rp/src/CMakeLists.txt.
 cmake_minimum_required(VERSION 3.26)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

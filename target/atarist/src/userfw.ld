@@ -4,7 +4,8 @@
  * port hardware, so the offsets below become runtime addresses by
  * adding ROM4_ADDR. Each module's .text section is placed at a fixed
  * offset within the image and main.s references that offset via the
- * matching `equ` (e.g. USERFW equ $FA0800 ↔ .text_userfw at 0x000800).
+ * matching `equ` in inc/sidecart_layout.s (e.g. USERFW equ $FA0800 ↔
+ * .text_userfw at 0x000800).
  *
  * Budget (must add up to <= CARTRIDGE_CODE_SIZE = 16 KB; the build
  * script asserts this against BOOT.BIN):
@@ -22,15 +23,17 @@
  * was inlined as a macro (FBDRV_INLINE) in userfw.s and the section
  * was removed. userfw's budget grew from 6 KB to 14 KB to absorb it.
  *
- * The template is now a pure 68000 CPU copy: no STE blitter path,
- * no _MCH dispatch -- same FBDRV_INLINE runs identically on plain
- * ST / STE / MegaSTE / TT / Falcon.
+ * FBDRV_INLINE is the 68000's copy and runs identically on plain
+ * ST / STE / MegaSTE / TT / Falcon. On a machine with a blitter
+ * userfw can copy the frame with it instead (the blit mode word the
+ * RP publishes); that code is in userfw.s too, within the same budget.
  *
  * Adding a new module is a two-step change:
  *   1. Pick an offset within the remaining cartridge budget and add a
  *      new ".text_<name> 0x????? : { <name>.o(.text) }" section here.
  *   2. Mirror the offset on the m68k side with `equ (ROM4_ADDR + $????)`
- *      in main.s, and add the .o target to target/atarist/Makefile.
+ *      in inc/sidecart_layout.s, and add the .o target to
+ *      target/atarist/Makefile.
  */
 SECTIONS
 {

@@ -100,13 +100,12 @@ STUDY_POINT macro
     endc
     endm
 
-; Per-VBL state area at the end of SCREEN_A's 32 KB allocation.
-; Used by FBDRV_INLINE to spill A7 (SP) around the MOVEM-burst that
-; includes A7 in its register list; the current-page pointer
-; UFW_SCREEN_PAGE and the saved TOS VBL vector / Physbase result
-; also live here. 20 bytes used; SCREEN_A's tail at $77D00 has 768
-; bytes available (shifter only reads 200*160 = 32000 B of each
-; screen page, allocation is 32 KB).
+; Per-VBL state area at the end of SCREEN_A's 32 KB allocation
+; ($77F00-$77FFF): the reset stub, the current-page pointer
+; UFW_SCREEN_PAGE, the saved TOS VBL vector / Physbase result and the
+; words below live here. SCREEN_A's tail from $77D00 has 768 bytes
+; available (shifter only reads 200*160 = 32000 B of each screen
+; page, allocation is 32 KB).
 ; UFW_RESET_STUB: .cold_reset copies userfw_reset_stub here and runs it,
 ; so the ST's last instructions before its cold reset come from RAM.
 UFW_RESET_STUB        equ $00077F00          ; up to $77F7F
@@ -157,17 +156,18 @@ UFW_IKBD_COUNT        equ $00077FFA          ; word
 ; framebuffer constants); change FB_COPY_LINES in one place to
 ; throttle how many ST scanlines the per-VBL copy touches.
 ;
-; FBDRV_TOTAL_BYTES must be divisible by FBDRV_ITER_BYTES (48) so
-; the unrolled REPT covers the full byte count without a tail.
+; FBDRV_TOTAL_BYTES need not be divisible by FBDRV_ITER_BYTES (48):
+; the unrolled REPT covers the whole iterations and the tail block at
+; the end of FBDRV_INLINE copies the remainder.
 ; FB_COPY_LINES * 160 byte rows / 48 byte iters: 150*160/48=500,
-; 200*160/48=666r32. For values that don't divide evenly the trailing
-; bytes are simply not copied (they remain stale on the screen page).
+; 200*160/48=666r32. The tail's register list is set by hand (see
+; the macro).
 FBDRV_ITER_BYTES      equ 48                            ; 12 longwords: D0-D7 + A1-A4 (A6=src, A5=dst, A0=dedicated audio pointer, A7=SP preserved -- IRQs may fire during the macro).
 FBDRV_TOTAL_BYTES     equ (FB_COPY_LINES * FB_ROW_BYTES) ; honours FB_COPY_LINES
 FBDRV_MAIN_ITERS      equ (FBDRV_TOTAL_BYTES / FBDRV_ITER_BYTES)
 FBDRV_MAIN_BYTES      equ (FBDRV_MAIN_ITERS * FBDRV_ITER_BYTES)
-FBDRV_TAIL_BYTES      equ (FBDRV_TOTAL_BYTES - FBDRV_MAIN_BYTES)  ; 20 bytes at FB_COPY_LINES=200 (= 5 longwords)
-FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at page_start + FBDRV_MAIN_BYTES (= 31980)
+FBDRV_TAIL_BYTES      equ (FBDRV_TOTAL_BYTES - FBDRV_MAIN_BYTES)  ; 32 bytes at FB_COPY_LINES=200 (= 8 longwords)
+FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at page_start + FBDRV_MAIN_BYTES (= 31968)
 
 ;----------------------------------------------------------------
 ; FBDRV_INLINE -- fully unrolled cart->ST screen framebuffer copy.
@@ -187,9 +187,9 @@ FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at
 ; A1-A4 hold pixels: every handler saves what it uses (A0 aside).
 ;
 ; Predec mode is 4 cyc faster per iter than d16(a5) displacement
-; (8+8n vs 12+8n on 68000). The catch: predec writes each 52-byte
+; (8+8n vs 12+8n on 68000). The catch: predec writes each 48-byte
 ; chunk into the destination ST page in REVERSE order relative to
-; the source -- chunks land from the screen-page END (offset 31980)
+; the source -- chunks land from the screen-page END (offset 31968)
 ; down to the START (offset 0). For the displayed image to look
 ; correct, the RP-side fb_chunky_to_planar pre-reverses chunks in
 ; the cart FB at $FA8300, so the m68k's reversal restores the
@@ -198,7 +198,7 @@ FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at
 ;
 ; Caller protocol (must be set up BEFORE the macro expansion):
 ;   A5 = destination ST screen page END
-;        ($70000 + 31980 or $78000 + 31980; .vbl_loop adds the
+;        ($70000 + 31968 or $78000 + 31968; .vbl_loop adds the
 ;        FBDRV_MAIN_ITERS * FBDRV_ITER_BYTES offset via LEA after
 ;        loading UFW_SCREEN_PAGE).
 ;
@@ -208,8 +208,8 @@ FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at
 ; A5 = original SCREEN_PAGE end - (FBDRV_MAIN_ITERS * FBDRV_ITER_BYTES)
 ; = original page START, which is the value .after_copy expects in A5.
 ;
-; Code size: 8 B per unrolled iteration * FBDRV_MAIN_ITERS (615)
-; + 6 B setup = ~5 KB inline, plus the small d16(a5) tail MOVEM at
+; Code size: 8 B per unrolled iteration * FBDRV_MAIN_ITERS (666)
+; + 6 B setup = ~5.3 KB inline, plus the small d16(a5) tail MOVEM at
 ; the end.
 FBDRV_INLINE          macro
     movea.l #FRAMEBUFFER_ADDR, a6
