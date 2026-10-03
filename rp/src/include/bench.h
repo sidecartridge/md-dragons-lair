@@ -41,8 +41,10 @@
 #define DEVHOOKS_APP_WRITE_TEST 6  // [WORD: chunk in sectors] the card's
                                    // write rate (a 2 MB scratch file in the
                                    // folder, then deleted)
-#define DEVHOOKS_APP_CONVERT 7     // WORD N: scene clip N converted into
-                                   // BENCH_FOLDER/<clip>.DLC; no word: back
+#define DEVHOOKS_APP_CONVERT 7     // WORD N [WORD 3|4]: scene clip N
+                                   // converted into BENCH_FOLDER/<clip>.DLC
+                                   // (for an ST or an STE; the machine
+                                   // plugged in's by default); no word: back
 
 // At boot, before the main loop.
 void bench_init(void);

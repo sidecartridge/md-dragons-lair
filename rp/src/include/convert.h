@@ -79,6 +79,10 @@ typedef struct {
   picture16_passes_t passes;
   picture16_options_t options;
   picture16_profile_t *profile;  // NULL, or each picture's stage times
+  // NULL, or a microsecond clock: decode_us then sums the decoding, its
+  // reads included (the pictures, the ones skipped, the headers read ahead).
+  uint32_t (*clock_us)(void);
+  uint64_t decode_us;
   uint8_t *ring_c;   // the caller's: the scaler's chroma ring
   uint8_t *lines_y;  // and the scaled luma lines
   convert_out_t out;

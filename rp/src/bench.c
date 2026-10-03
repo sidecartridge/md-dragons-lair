@@ -1468,9 +1468,12 @@ typedef struct {
   uint32_t file_crc;
   uint32_t total_ms;
   uint32_t read_ms;
+  uint32_t decode_ms;
+  uint32_t convert_ms;  // what the others leave: scaling, histogram, ...
   uint32_t sound_ms;
+  uint32_t encode_ms;
   uint32_t write_ms;
-  uint32_t histogram_ms;  // the passes, from the cycle counter
+  uint32_t histogram_ms;  // of the conversion, from the cycle counter
   uint32_t palette_ms;
   uint32_t dither_ms;
 } conv_results_t;
@@ -1518,12 +1521,15 @@ static void conv_draw(void) {
           (unsigned long)(r->total_ms / 100u % 10u),
           (unsigned long)(clip_ms ? r->total_ms / clip_ms : 0),
           (unsigned long)(clip_ms ? r->total_ms * 100u / clip_ms % 100u : 0));
-    textf(0, 18, C_TEXT, "READ    %5lu MS  SOUND   %5lu MS",
-          (unsigned long)r->read_ms, (unsigned long)r->sound_ms);
-    textf(0, 19, C_TEXT, "WRITE   %5lu MS  HIST    %5lu MS",
-          (unsigned long)r->write_ms, (unsigned long)r->histogram_ms);
-    textf(0, 20, C_TEXT, "PALETTE %5lu MS  DITHER  %5lu MS",
-          (unsigned long)r->palette_ms, (unsigned long)r->dither_ms);
+    textf(0, 18, C_TEXT, "READ    %6lu MS DECODE  %6lu MS",
+          (unsigned long)r->read_ms, (unsigned long)r->decode_ms);
+    textf(0, 19, C_TEXT, "CONVERT %6lu MS SOUND   %6lu MS",
+          (unsigned long)r->convert_ms, (unsigned long)r->sound_ms);
+    textf(0, 20, C_TEXT, "ENCODE  %6lu MS WRITE   %6lu MS",
+          (unsigned long)r->encode_ms, (unsigned long)r->write_ms);
+    textf(0, 21, C_DIM, "  HIST  %6lu MS PALETTE %6lu MS",
+          (unsigned long)r->histogram_ms, (unsigned long)r->palette_ms);
+    textf(0, 22, C_DIM, "  DITHER%6lu MS", (unsigned long)r->dither_ms);
   }
   text(0, 24, C_DIM, "SPACE: BACK");
 }
@@ -1559,29 +1565,37 @@ static void conv_finish(int result) {
   r->file_crc = h->crc;
   r->total_ms = (uint32_t)(t->total / 1000u);
   r->read_ms = (uint32_t)(t->read / 1000u);
+  r->decode_ms = (uint32_t)(t->decode / 1000u);
   r->sound_ms = (uint32_t)(t->sound / 1000u);
+  r->encode_ms = (uint32_t)(t->encode / 1000u);
   r->write_ms = (uint32_t)(t->write / 1000u);
+  r->convert_ms = (uint32_t)((t->total - t->read - t->decode - t->sound -
+                              t->encode - t->write) /
+                             1000u);
   r->histogram_ms = (uint32_t)(t->histogram_cycles / CYCLES_PER_US / 1000u);
   r->palette_ms = (uint32_t)(t->palette_cycles / CYCLES_PER_US / 1000u);
   r->dither_ms = (uint32_t)(t->dither_cycles / CYCLES_PER_US / 1000u);
   conv_release_heap();
   DPRINTF("Convert %s into %s: result %d; %lu frames, %lu pictures, %lu "
           "indexed, %lu bytes; source %lu bytes CRC-32 %08lX; file CRC-32 "
-          "%08lX; %lu ms (read %lu, sound %lu, write %lu; "
-          "histogram %lu, palette %lu, dither %lu)\n",
+          "%08lX; %lu ms (read %lu, decode %lu, convert %lu, sound %lu, "
+          "encode %lu, write %lu; histogram %lu, palette %lu, dither %lu)\n",
           s_cv.clip, s_cv.out_path, result, (unsigned long)r->frames,
           (unsigned long)r->pictures, (unsigned long)r->keys,
           (unsigned long)r->bytes, (unsigned long)r->source_bytes,
           (unsigned long)r->source_crc, (unsigned long)r->file_crc,
           (unsigned long)r->total_ms, (unsigned long)r->read_ms,
-          (unsigned long)r->sound_ms, (unsigned long)r->write_ms,
+          (unsigned long)r->decode_ms, (unsigned long)r->convert_ms,
+          (unsigned long)r->sound_ms, (unsigned long)r->encode_ms,
+          (unsigned long)r->write_ms,
           (unsigned long)r->histogram_ms, (unsigned long)r->palette_ms,
           (unsigned long)r->dither_ms);
   palette_set(conv_palette(result == 0 ? CONV_SEGMENTS : s_cv.lit));
   s_dirty = true;
 }
 
-static void conv_start(int index) {
+// `gun_bits` 0: the machine plugged in's.
+static void conv_start(int index, int gun_bits) {
   if (!benchResults.image_found || s_test.running || s_test.pending ||
       s_show.active || s_ip.active || s_cv.active) {
     return;
@@ -1612,7 +1626,9 @@ static void conv_start(int index) {
   snprintf(s_cv.out_path, sizeof(s_cv.out_path), "%s/%s.DLC", BENCH_FOLDER,
            base);
   // The machine plugged in: an ST's palette has 3 bits a gun.
-  s_cv.gun_bits = (st_session_machine() >> 4) == 0 ? 3 : 4;
+  s_cv.gun_bits = gun_bits != 0                        ? gun_bits
+                  : (st_session_machine() >> 4) == 0 ? 3
+                                                       : 4;
 
   // The screen, shown before its memory goes to the converter.
   conv_draw();
@@ -1660,11 +1676,10 @@ static void conv_start(int index) {
   m.video = &s_ps;
   m.dec = &s_dec;
   bench_start_cycles();
-  int gun_bits = s_cv.gun_bits;
   DPRINTF("Convert %s into %s for %s\n", s_cv.clip, s_cv.out_path,
-          gun_bits == 4 ? "an STE" : "an ST");
+          s_cv.gun_bits == 4 ? "an STE" : "an ST");
   int r = convjob_start(s_cv.job, &m, &s_iso, &entry, s_cv.out_path,
-                        gun_bits, bench_run2, bench_cycles);
+                        s_cv.gun_bits, bench_run2, bench_cycles);
   if (r < 0) {
     conv_finish(r);
   }
@@ -1862,7 +1877,7 @@ void bench_handle_key(const ikbd_key_event_t *key) {
       sound_start(0, true);
       break;
     case 0x2E:  // C: the first scene clip converted into a clip file
-      conv_start(0);
+      conv_start(0, 0);
       break;
     case 0x2D:  // X: back to Booster (the ST resets into it)
       st_session_return_to_booster();
@@ -1940,7 +1955,10 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
       return 1;
     case DEVHOOKS_APP_CONVERT:
       if (payload_size >= 2u) {
-        conv_start((int)payload[0]);
+        conv_start((int)payload[0],
+                   payload_size >= 4u && (payload[1] == 3 || payload[1] == 4)
+                       ? (int)payload[1]
+                       : 0);
       } else if (s_cv.active && s_cv.done) {
         conv_stop();
       }

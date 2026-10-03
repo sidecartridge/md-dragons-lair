@@ -18,7 +18,9 @@ static int video_read(void *ctx, uint8_t *buf, uint32_t len) {
   UINT got = 0;
   uint32_t t0 = time_us_32();
   int r = iso9660_fread(&j->video_file, buf, len, &got);
-  j->times.read += time_us_32() - t0;
+  uint32_t us = time_us_32() - t0;
+  j->times.read += us;
+  j->video_read += us;
   if (r != ISO9660_OK) {
     return -1;
   }
@@ -74,6 +76,11 @@ static void sound_taken(convjob_t *j) {
 
 // --- The clip file --------------------------------------------------------------
 
+// Time putting records together since t0, the file's writes not counted.
+static void encode_time(convjob_t *j, uint32_t t0, uint64_t write0) {
+  j->times.encode += (time_us_32() - t0) - (j->times.write - write0);
+}
+
 // The bytes gathered, written: a whole piece at an offset of its size but
 // for the file's end.
 static int out_flush(convjob_t *j) {
@@ -111,9 +118,11 @@ static int out_header(void *ctx, const uint8_t header[CLIP_HEADER_BYTES]) {
   }
   FSIZE_t end = f_tell(&j->out);
   UINT done = 0;
+  uint32_t t0 = time_us_32();
   bool ok = f_lseek(&j->out, 0) == FR_OK &&
             f_write(&j->out, header, CLIP_HEADER_BYTES, &done) == FR_OK &&
             done == CLIP_HEADER_BYTES && f_lseek(&j->out, end) == FR_OK;
+  j->times.write += time_us_32() - t0;
   return ok ? 0 : -1;
 }
 
@@ -121,8 +130,12 @@ static int out_header(void *ctx, const uint8_t header[CLIP_HEADER_BYTES]) {
 
 static void job_begin(void *ctx, const convert_picture_t *picture) {
   convjob_t *j = (convjob_t *)ctx;
+  const int8_t *sound = frame_sound(j);
+  uint32_t t0 = time_us_32();
+  uint64_t write0 = j->times.write;
   clip_writer_picture(j->m.writer, picture->frames, picture->palette->rgb444,
-                      false, frame_sound(j));
+                      false, sound);
+  encode_time(j, t0, write0);
   sound_taken(j);
 }
 
@@ -131,15 +144,22 @@ static void job_lines(void *ctx, int line, const uint8_t *indices,
                       int width) {
   convjob_t *j = (convjob_t *)ctx;
   (void)line;
+  uint32_t t0 = time_us_32();
+  uint64_t write0 = j->times.write;
   for (int r = 0; r < 2; r++) {
     clip_writer_row(j->m.writer, indices + r * width, NULL);
   }
+  encode_time(j, t0, write0);
 }
 
 static void job_end(void *ctx, const convert_picture_t *picture) {
   convjob_t *j = (convjob_t *)ctx;
   for (uint32_t f = 1; f < picture->frames; f++) {
-    clip_writer_held(j->m.writer, frame_sound(j));
+    const int8_t *sound = frame_sound(j);
+    uint32_t t0 = time_us_32();
+    uint64_t write0 = j->times.write;
+    clip_writer_held(j->m.writer, sound);
+    encode_time(j, t0, write0);
     sound_taken(j);
   }
   j->pictures++;
@@ -187,6 +207,7 @@ int convjob_start(convjob_t *j, const convjob_memory_t *memory,
   convert_init(&j->conv, j->m.dec, j->m.ring_c, j->m.lines_y, &options,
                &out);
   j->conv.keep_percent = CONVERT_KEEP_PERCENT;
+  j->conv.clock_us = time_us_32;
   j->profile.cycles = cycles;
   j->conv.profile = (cycles != NULL) ? &j->profile : NULL;
   j->result = j->m.writer->error != 0 ? j->m.writer->error : 1;
@@ -215,13 +236,17 @@ int convjob_step(convjob_t *j) {
     j->times.palette_cycles += j->profile.palette + j->profile.table;
     j->times.dither_cycles += j->profile.dither;
   }
+  j->times.decode = j->conv.decode_us - j->video_read;
   if (r < 0) {
     j->result = r;
     f_close(&j->out);
   } else if (r == 0) {
     read_to_end(j);
     j->m.writer->header.source_crc = j->source_crc;
+    uint32_t t1 = time_us_32();
+    uint64_t write0 = j->times.write;
     int err = clip_writer_finish(j->m.writer);
+    encode_time(j, t1, write0);
     if (err == 0 && j->m.writer->header.frames != convert_length(&j->conv)) {
       err = -1;  // the records and the clip's frames disagree
     }

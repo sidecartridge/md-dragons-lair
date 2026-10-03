@@ -164,11 +164,23 @@ static int read_ahead(convert_t *c) {
   }
 }
 
+static uint32_t clock_now(const convert_t *c) {
+  return (c->clock_us != NULL) ? c->clock_us() : 0;
+}
+
+static void decode_time(convert_t *c, uint32_t t0) {
+  if (c->clock_us != NULL) {
+    c->decode_us += c->clock_us() - t0;
+  }
+}
+
 int convert_next(convert_t *c) {
   mpeg1_t *dec = c->dec;
   if (!c->started) {
     c->started = true;
+    uint32_t t0 = clock_now(c);
     int r = read_ahead(c);
+    decode_time(c, t0);
     if (r < 0) {
       return r;
     }
@@ -180,12 +192,14 @@ int convert_next(convert_t *c) {
         !cadence_picture_rate(dec->picture_rate, &c->num, &c->den)) {
       return CONVERT_ERR_RATE;
     }
+    uint32_t t0 = clock_now(c);
     int decoded = mpeg1_decode_picture(dec, NULL, NULL);
     if (decoded < 0) {
       return decoded;
     }
     // The next picture's header: how long this one shows.
     int r = read_ahead(c);
+    decode_time(c, t0);
     if (r < 0) {
       return r;
     }

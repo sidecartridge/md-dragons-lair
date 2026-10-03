@@ -56,11 +56,15 @@ typedef struct {
   int16_t *pcm;   // MP2_FRAME_SAMPLES
 } convjob_memory_t;
 
-// Where the time goes, in microseconds (and the passes' cycles).
+// Where the time goes, in microseconds (and the passes' cycles), each
+// stage without the others: what total leaves is the conversion proper
+// (scaling, histogram, palette, dither).
 typedef struct {
   uint64_t total;
   uint64_t read;     // the clip from the image: pictures and sound
+  uint64_t decode;   // the pictures decoded
   uint64_t sound;    // MP2 decoded and turned to 8 bits
+  uint64_t encode;   // the records put together, rows encoded
   uint64_t write;    // the clip file
   uint64_t histogram_cycles;
   uint64_t palette_cycles;
@@ -75,6 +79,7 @@ typedef struct {
   FIL out;
   int gun_bits;
   uint32_t source_crc;     // of the clip as the pictures are read
+  uint64_t video_read;     // microseconds reading the pictures
   uint32_t sound_samples;  // decoded and not yet in a record
   bool sound_end;
   uint32_t frame;          // records written
