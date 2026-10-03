@@ -26,8 +26,8 @@ Python tools use the standard library only.
 - `stopwatch [--seconds S]` (debug builds, `TIME_STUDY = 1` in `userfw.s`): the VBL's period,
   when the ST's loop wakes, starts and ends a frame's copy and goes idle, each after its VBL,
   the copy's length and the frames a second, in microseconds (4.07 µs ticks of MFP Timer-A on
-  one timeline). A 25 fps build (`APP_PROFILE=PROFILE_25FPS tools/dev/flash.sh debug`) builds in
-  its own folder and its ID ends in `+25fps`.
+  one timeline). The app plays at 25 fps; a 50 fps build (`APP_PROFILE=PROFILE_50FPS
+  tools/dev/flash.sh debug`) builds in its own folder and its ID ends in `+50fps`.
 - Debug builds carry the devhooks mailbox (`rp/src/include/devhooks.h`, included once from
   `emul.c`, served by `devhooks_poll()` in the main loop), which `key` and `app` write.
 
