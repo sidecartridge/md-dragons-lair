@@ -203,8 +203,10 @@ int convert_next(convert_t *c) {
       continue;
     }
     uint8_t *spare[2];
-    if (mpeg1_spare_rows(dec, spare, 2) < 2) {
-      return CONVERT_ERR_MEMORY;
+    if (mpeg1_spare_rows(dec, spare, 2) < 2 ||
+        (((uintptr_t)spare[0] | (uintptr_t)spare[1]) & 3u) != 0) {
+      return CONVERT_ERR_MEMORY;  // the Cortex-M0+ faults on unaligned
+                                  // 16- and 32-bit accesses
     }
     picture16_memory_t memory = {spare[0], c->ring_c, c->lines_y,
                                  spare[0] + PICTURE16_RING_Y_BYTES, spare[1]};

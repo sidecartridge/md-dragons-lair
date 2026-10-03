@@ -51,7 +51,7 @@
 enum {
   CONVERT_ERR_RATE = -20,    // a picture rate MPEG-1 does not define
   CONVERT_ERR_SIZE = -21,    // not 352x240
-  CONVERT_ERR_MEMORY = -22,  // a frame store without two spare rows
+  CONVERT_ERR_MEMORY = -22,  // a frame store without two aligned spare rows
 };
 
 // A picture handed out.

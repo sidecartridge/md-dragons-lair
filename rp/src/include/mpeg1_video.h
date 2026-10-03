@@ -158,7 +158,9 @@ typedef struct {
   int8_t ref_row[MPEG1_MAX_MB_ROWS];
   int8_t new_row[MPEG1_MAX_MB_ROWS];
   bool have_reference;
-  uint8_t own_row[MPEG1_SLOT_BYTES];
+  // Word-aligned: with a frame store it can be one of the store's rows,
+  // whose spare ones the converter works in with 16- and 32-bit accesses.
+  _Alignas(4) uint8_t own_row[MPEG1_SLOT_BYTES];
   // A macroblock's coefficients, parsed first and transformed together.
   // Word-aligned: the RP's inverse DCT reads two coefficients a word.
   _Alignas(4) int16_t block[6][64];
