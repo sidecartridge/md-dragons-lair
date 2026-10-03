@@ -242,7 +242,7 @@
  * to keep c2p's natural row-major output going to a 32 KB scratch
  * buffer in RP RAM, then do a chunk-reversed memcpy from scratch to
  * the cart FB once both cores finish (~120 us / frame, well under
- * fb_render_frame's main-loop budget). Per-byte address arithmetic
+ * a frame's main-loop budget). Per-byte address arithmetic
  * inside the c2p hot path is also possible but more invasive.
  *
  * Cost / benefit:

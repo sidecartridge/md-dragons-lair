@@ -10,11 +10,6 @@
  * The main loop calls bench_frame() once a pass; the read test runs in
  * slices of a few milliseconds from there, so the ROM3 ring, the keyboard
  * and SELECT keep being served while it runs.
- *
- * The SD card is started only once the ST has booted: at its first hello,
- * or BENCH_SD_WAIT_US after the RP started when no hello comes (the RP
- * restarted under an ST already running). Until then the card is not
- * touched, so nothing of it happens while the ST powers up.
  */
 
 #ifndef BENCH_H
@@ -23,10 +18,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "aconfig.h"
 #include "ikbd.h"
 
-// The app's folder on the SD card, created at boot when it is missing.
-#define BENCH_FOLDER "/DLAIR"
+#define BENCH_FOLDER APP_FOLDER
 
 // The image's usual name; any ISO in the folder whose root holds S01.MPG
 // is taken when this one is not there.
@@ -46,10 +41,13 @@
 #define DEVHOOKS_APP_WRITE_TEST 6  // the card's write rate (a 2 MB scratch
                                    // file in the folder, then deleted)
 
-#define BENCH_SD_WAIT_US 3000000u
-
-// At boot, before the main loop. The SD card waits (see above).
+// At boot, before the main loop.
 void bench_init(void);
+
+// At boot, after bench_init(), where md-microfirmware-template starts the SD
+// card: mounts it, creates the app's folder when it is missing, finds the
+// image and reads its root directory.
+void bench_start_sd(void);
 
 // A new ST session: draw the screen again.
 void bench_restart(void);

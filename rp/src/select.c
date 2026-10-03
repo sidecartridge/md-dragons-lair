@@ -77,7 +77,7 @@ void select_configure() {
   gpio_set_pulls(SELECT_GPIO, false, true);  // Pull down (false, true)
   gpio_pull_down(SELECT_GPIO);
 
-  // A raw handler, so the CYW43 driver's own GPIO interrupt is not replaced.
+  // A raw handler: it shares the GPIO interrupt instead of taking it over.
   gpio_add_raw_irq_handler(SELECT_GPIO, select_gpioIrq);
   gpio_set_irq_enabled(SELECT_GPIO, GPIO_IRQ_EDGE_RISE | GPIO_IRQ_EDGE_FALL,
                        true);

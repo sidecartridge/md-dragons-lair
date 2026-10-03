@@ -109,8 +109,8 @@ bool ikbd_pop_key(ikbd_key_event_t *out);
 /* Enable / disable the built-in ESC press+release -> CMD_BOOT_GEM
  * sentinel write. Default = true (backward-compatible with the
  * ergonomic of "press ESC to exit"). Apps that want to own
- * the ESC key (e.g. the menu+demo dispatcher that uses ESC for
- * "back to menu") call ikbd_set_esc_auto_exit(false) once at boot.
+ * the ESC key (e.g. a menu that uses ESC for "back") call
+ * ikbd_set_esc_auto_exit(false) once at boot.
  * ESC events are still delivered via ikbd_pop_key() regardless of
  * the setting. */
 void ikbd_set_esc_auto_exit(bool enabled);

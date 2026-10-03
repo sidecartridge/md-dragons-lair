@@ -12,7 +12,7 @@ the app: the checks hold either way. SELECT restarts the RP on the way.
     python3 tools/dev/tools_harness.py --flash    # also flash the debug build first
     python3 tools/dev/tools_harness.py --reset    # also restart the RP at the end
 
-Leaves the demo menu on screen. Exits 0 when every check passes. Writes
+Leaves the bench on screen. Exits 0 when every check passes. Writes
 tools/dev/logs/tools-harness-<time>.json.
 """
 
@@ -83,14 +83,6 @@ def frames_published():
     return int(m.group(1)) if m else None
 
 
-def publish_rate(seconds=2.0):
-    """Frames published per second, from two readings of the counter."""
-    a, t0 = frames_published(), time.monotonic()
-    time.sleep(seconds)
-    b, t1 = frames_published(), time.monotonic()
-    return None if None in (a, b) else (b - a) / (t1 - t0)
-
-
 # ---------------------------------------------------------------------------
 def build_checks():
     print("build")
@@ -159,20 +151,11 @@ def device_checks(do_reset):
                                              "boot status")))
 
     print("mailbox: key, app")
-    rc, _ = swdpy("app", "menu")
-    check("app menu", rc == 0)
-    cur = LogCursor()
-    rc, out = swdpy("key", "1")
-    check("key 1 launches the first demo", rc == 0 and cur.wait(r"starting demo 'uridium'"),
-          out.strip())
-    cur = LogCursor()
-    rc, out = swdpy("key", "esc")
-    check("key esc goes back to the menu",
-          rc == 0 and cur.wait(r"ESC from demo 'uridium' -> back to menu"), out.strip())
-    cur = LogCursor()
-    rc, out = swdpy("app", "demo", "2")
-    check("app demo 2 launches the second demo",
-          rc == 0 and cur.wait(r"starting demo '3d'"), out.strip())
+    rc, out = swdpy("key", "down", "up")
+    check("key down up: the main loop takes the keys", rc == 0, out.strip())
+    rc, out = swdpy("app", "list_top", "0")
+    check("app list_top 0: the bench takes the command",
+          rc == 0 and "result 1" in out, out.strip())
 
     print("fb (core 0 stops for each dump)")
     png = os.path.join(DEV, "logs", "tools-harness-fb.png")
@@ -188,22 +171,6 @@ def device_checks(do_reset):
     b = frames_published()
     check("the app runs on after the grabs", None not in (a, b) and b > a,
           f"frames published {a} -> {b}")
-
-    print("slow_frame, overlay")
-    base = publish_rate()
-    rc, _ = swdpy("app", "slow_frame", "100")
-    slow = publish_rate()
-    rc2, _ = swdpy("app", "slow_frame", "0")
-    again = publish_rate()
-    check("slow_frame 100 slows the publishes, 0 restores them",
-          rc == 0 and rc2 == 0 and None not in (base, slow, again)
-          and slow < 0.6 * base and again > 0.8 * base,
-          f"{base:.1f} -> {slow:.1f} -> {again:.1f} frames/s"
-          if None not in (base, slow, again) else "")
-    rc, _ = swdpy("app", "overlay", "0")
-    rc2, _ = swdpy("app", "overlay", "1")
-    check("app overlay 0 and 1", rc == 0 and rc2 == 0)
-    swdpy("app", "menu")
 
     print("crash, postmortem")
     rc, out = swdpy("crash")

@@ -74,10 +74,6 @@ void emul_start() {
   }
 #endif
 
-  // Reset the IKBD ring (init order before commemul_init is fine since
-  // the producer side runs from the main loop, not from an IRQ).
-  ikbd_init();
-
   // Initialise the cartridge ROM4 read engine. ROM4 reads are served
   // entirely by chained DMAs feeding the PIO TX FIFO -- no CPU/IRQ
   // involvement. IKBD ingest is on ROM3 + commemul ring (see main
@@ -95,6 +91,11 @@ void emul_start() {
   if (commemul_init() < 0) {
     panic("commemul_init failed: PIO/DMA claim or program load returned <0");
   }
+
+  // The ROM3 ring's consumer (the template's command handler): the IKBD
+  // samples, kept in order. fb_init()'s first publish already drains the
+  // ring. It also writes the keyboard-only input mode into the window.
+  ikbd_init();
 
   // Initialise the 32 KB low-res framebuffer (320x200, 4 bpp). Sets
   // up `fb_screen` for the font/draw primitives, clears the FB to
@@ -115,23 +116,27 @@ void emul_start() {
   // Initialise the cart audio buffer producer (see audio.h). The
   // m68k Timer-B IRQ in userfw.s consumes the buffer at ~5,585 Hz
   // (2 B/sample dual-channel mode). audio_init() leaves the buffer
-  // silent until a callback is installed; the playback source is
-  // chosen below, after the SD card has had a chance to mount.
+  // silent until a callback is installed.
   audio_init();
-
-  // The SD card is started by the bench, once the ST has booted (bench.h).
-
-  // Cartridge SELECT button, configured in main() (held at power-on it goes
-  // to Booster). While the app runs, as md-microfirmware-template: a short
-  // press restarts the RP, a press held 10 s is a factory reset (the global
-  // settings are erased and Booster then clears every app's settings).
-  // select_poll() in the main loop runs them; it never blocks.
-  select_setResetCallback(reset_device);
-  select_setLongResetCallback(reset_deviceAndEraseFlash);
 
   // The bench screen: the CD-ROM image in BENCH_FOLDER, listed and read
   // (bench.h). ESC keeps ikbd.c's default: back to GEM.
   bench_init();
+
+  // Cartridge SELECT button, as md-microfirmware-template, in its place in
+  // the start-up: a short press restarts the RP, a press held 10 s is a
+  // factory reset (the global settings are erased and Booster then clears
+  // every app's settings). select_poll() in the main loop runs them; it
+  // never blocks.
+  select_configure();
+  select_setResetCallback(reset_device);
+  select_setLongResetCallback(reset_deviceAndEraseFlash);
+
+  // The SD card, where md-microfirmware-template starts it: mounted, the
+  // app's folder created when it is missing, the image found and its root
+  // directory read.
+  bench_start_sd();
+
   // Debug builds: host commands over SWD (devhooks.h, tools/dev/swd.py).
   devhooks_setAppHandler(bench_devhook);
 

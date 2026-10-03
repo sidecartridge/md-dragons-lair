@@ -67,7 +67,7 @@ uint8_t *fb_chunked_scratch(void) { return (uint8_t *)fb_planar_scratch; }
 
 /* Generic Core 1 worker loop (dual-core). Pops a job function
  * pointer + arg off the FIFO, runs it, signals completion. Both the c2p
- * bottom half and the demos' band rendering dispatch through this. The
+ * bottom half and an app's own two-core work dispatch through this. The
  * fn/arg travel through the FIFO (not shared memory), so the FIFO's
  * push/pop barriers fully order the handoff.
  *

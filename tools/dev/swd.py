@@ -72,9 +72,9 @@ and needs `--force`, because it is a factory reset (reset_deviceAndEraseFlash).
 name: esc, return, space, up, down, left, right, 1-0, a-z, f1-f10...) is pressed and
 released, and the bytes enter where the ST's own do, so the app cannot tell
 the difference. `app` sends a command named by a DEVHOOKS_APP_<NAME> define in
-rp/src/include, with optional 16-bit words: the demo dispatcher has `demo N`,
-`menu`, `overlay 0|1`, `slow_frame MS`, `input_mode 0-3`, `ikbd_cmd BYTE...`,
-`audio_out 0|1`, `tone HZ` and `copy_mode 0-2 [PIECE]` (demo.h).
+rp/src/include, with optional 16-bit words: the bench has `read_test`,
+`list_top N`, `slideshow N`, `in_place N [1]`, `sound N [1]` and `write_test`
+(bench.h).
 
 `stopwatch` (debug builds, with TIME_STUDY = 1 in userfw.s) reads the ST's
 stopwatch points for a few seconds: the VBL's period, when the loop wakes, when

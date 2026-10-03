@@ -74,7 +74,7 @@ static uint32_t s_esc_press_us = 0;
 
 /* When true (default), ESC press+release pairs write CMD_BOOT_GEM to
  * the cart sentinel and userfw exits to GEM. Apps that want to own
- * the ESC key (e.g. menu+demo dispatcher) clear this via
+ * the ESC key (e.g. a menu that uses it for "back") clear this via
  * ikbd_set_esc_auto_exit(false) -- ESC events are still delivered
  * through ikbd_pop_key, the auto-write is just gated off. */
 static bool s_esc_auto_exit = true;
@@ -99,9 +99,9 @@ static uint16_t s_out_gen = 0;
  * sends a packet once the mouse has moved that many counts, not after every
  * count. Every byte costs the ST an interrupt of about 40 us; a mouse moved
  * fast at threshold 1 fills the line (16 bytes a VBL, about 0.6 ms) and a
- * full-screen blit then misses VBLs (a Mega ST: 50 -> 40 frames a second in
- * a demo). The movement adds up the same; a packet carries up to that many
- * counts. */
+ * full-screen blit then misses VBLs (a Mega ST: 50 -> 40 frames a second
+ * with a full-screen frame). The movement adds up the same; a packet carries
+ * up to that many counts. */
 #define IKBD_MOUSE_THRESHOLD 4u
 
 typedef struct {

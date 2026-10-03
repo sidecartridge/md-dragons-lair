@@ -14,6 +14,10 @@
 #include "settings.h"
 
 #define ACONFIG_PARAM_FOLDER "FOLDER"
+// The app's folder on the SD card, created at boot when it is missing. The
+// app uses this name; FOLDER only records it (the dev UUID's sector may hold
+// another app's value).
+#define APP_FOLDER "/DLAIR"
 #define ACONFIG_PARAM_MODE "MODE"
 
 #define ACONFIG_SUCCESS 0

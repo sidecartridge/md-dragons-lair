@@ -11,8 +11,9 @@
  *     ST the full-screen copy and the sound take about 35 ms of the frame's
  *     40. For story games with rich sound (laserdisc-style).
  *
- * Choose it with APP_PROFILE: `APP_PROFILE=PROFILE_25FPS ./build.sh ...`
- * (rp/src/CMakeLists.txt passes it on), or a define before this header.
+ * This app plays at 25 fps: rp/src/CMakeLists.txt passes PROFILE_25FPS
+ * unless APP_PROFILE says otherwise (`APP_PROFILE=PROFILE_50FPS ./build.sh
+ * ...`). Without a define (the host tests) this header takes PROFILE_50FPS.
  * The ST's image is the same for both: the RP writes the profile into the
  * cartridge window (CART_PROFILE_OFFSET) before the ST boots, and userfw
  * reads it once. fb_publish() then paces the app at the profile's frame
