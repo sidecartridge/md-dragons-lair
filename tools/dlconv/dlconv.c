@@ -747,6 +747,8 @@ static int play_clip(const char *path, const char *out_path) {
   uint64_t decode_us = 0;
   uint32_t worst_us = 0;
   uint32_t largest = 0;
+  uint32_t clip_crc = 0;  // as convert prints it: each picture's indices
+                          // and palette
   for (uint32_t frame = 0; frame < h.frames && errors == 0; frame++) {
     clip_record_t rec;
     uint32_t t0 = now_us();
@@ -780,6 +782,11 @@ static int play_clip(const char *path, const char *out_path) {
         palette[e] = (uint16_t)(rec.palette[2 * e] | (rec.palette[2 * e + 1] << 8));
       }
     }
+    if (rec.kind != CLIP_HELD) {
+      uint32_t crc = crc32_update(0, pixels, sizeof(pixels));
+      crc = crc32_update(crc, palette, sizeof(palette));
+      clip_crc = crc32_update(clip_crc, &crc, sizeof(crc));
+    }
     at += (uint32_t)n;
     if (out != NULL) {
       for (int i = 0; i < CLIP_WIDTH * CLIP_HEIGHT; i++) {
@@ -802,10 +809,12 @@ static int play_clip(const char *path, const char *out_path) {
     errors++;
   }
   printf("%s: %s, %u frames, %u pictures (%u key), %ld bytes, largest record "
-         "%u; picture decode %.1f us on average, %u us at worst\n",
+         "%u; picture decode %.1f us on average, %u us at worst; clip CRC-32 "
+         "%08X\n",
          path, errors ? "BAD" : "good", (unsigned)h.frames, (unsigned)pictures,
          (unsigned)keys, size, (unsigned)h.largest_record,
-         pictures ? (double)decode_us / pictures : 0.0, (unsigned)worst_us);
+         pictures ? (double)decode_us / pictures : 0.0, (unsigned)worst_us,
+         (unsigned)clip_crc);
   if (out != NULL) {
     fclose(out);
   }
