@@ -39,6 +39,10 @@
 #include "mpeg1_video.h"
 #include "picture16.h"
 
+// The converter's version, in every clip it writes: a clip of another
+// version is converted again. Raise it when the converter's output changes.
+#define CONVERT_VERSION 1
+
 // The game's palette stability (keep_percent): measured on the whole game
 // against ffmpeg's recipe held to the machine's colours, and chosen by eye.
 #define CONVERT_KEEP_PERCENT 10

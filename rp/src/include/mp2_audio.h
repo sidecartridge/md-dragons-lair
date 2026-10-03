@@ -69,6 +69,8 @@ static inline int mp2_output_rate(const mp2_t *a) { return a->sample_rate / 2; }
 // signed 8 bits. The game's sound is quiet (-26 dBFS on average) and its
 // peaks rare, so a gain above 1 needs the limiter rather than clipping.
 #define MP2_GAIN_UNITY 256
+// The game's level: +9 dB, heard on an STE and a Mega ST.
+#define MP2_GAIN_GAME 724
 void mp2_to_pcm8(const int16_t *in, int8_t *out, uint32_t n, int gain);
 
 #endif  // MP2_AUDIO_H
