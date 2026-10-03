@@ -127,7 +127,11 @@ target_sources(${PROJECT_NAME} PRIVATE
         aconfig.c
         audio.c
         bench.c
+        cadence.c
+        clip.c
         commemul.c
+        convert.c
+        convjob.c
         crc32.c
         emul.c
         fb.c

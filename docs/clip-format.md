@@ -2,9 +2,9 @@
 
 A converted clip of the game: what the cartridge writes to the SD card from one MPEG clip of the
 CD-ROM image, and what the player reads back. One record per output frame, at 25 frames a
-second: the frame's sound, and its picture when a new one starts, stored as the changes from the
-picture before. A clip is written and read in one pass, front to back; only the header is written
-again, once, when the clip is finished.
+second: the frame's sound, and its picture when a new one starts, stored alone or as the changes
+from the picture before. A clip is written and read in one pass, front to back; only the header
+is written again, once, when the clip is finished.
 
 The reference code is `rp/src/clip.c` (`clip.h`): the encoder, the decoder and the writer, the
 same on the cartridge and in `tools/dlconv` (`dlconv encode`, `dlconv play`). `tests/host/test_clip.c`
@@ -93,10 +93,15 @@ five literals of 64 instead (5 x 33 = 165 bytes), so a row never takes more than
 
 ## Key pictures and the index
 
-The clip's first picture is a key, then any picture that starts 50 frames (2 s) or more after
-the last key, and any picture the converter is asked to make one (the points the game will
-start a clip from). After the records, the index lists each key: its frame (4 bytes) and its
-record's offset from the file's start (4 bytes). The index ends the file.
+The index lists the clip's first picture, then any picture that starts 50 frames (2 s) or more
+after the last one listed, and any picture the converter is asked to list (the points the game
+will start a clip from); each of them is a key. Other pictures may be keys too: the cartridge
+stores every picture whole, since a delta needs the picture before and the cartridge has no room
+to keep it (keeping it on the card took longer than the conversion itself). `dlconv encode`
+writes the same file, or deltas with `--deltas`.
+
+After the records, the index lists its keys: each one's frame (4 bytes) and its record's offset
+from the file's start (4 bytes). The index ends the file.
 
 ## Reading
 
@@ -114,8 +119,10 @@ the index and reads from that record on.
 
 ## The game, converted
 
-All 194 clips of the game, as the converter makes them (palette stability 10 %, the mixing
-dither): 30,915 frames from 18,436 pictures, 691 of them keys; 338.5 MB for an STE and 342.4 MB
-for an ST, of which 27.3 MB is sound. A picture's record takes 17.8 KB on average (its sound
-included). A clip's sound starts with its pictures; where the source's sound ends before them (a
+All 194 clips of the game, as the cartridge converts them (palette stability 10 %, the mixing
+dither, every picture whole): 30,915 frames from 18,436 pictures, 691 of them in the index;
+531.5 MB for an STE and 545.6 MB for an ST, of which 27.3 MB is sound. A picture's record takes
+28.2 KB on average for an STE, 29.0 KB for an ST (its sound included). As deltas
+(`dlconv encode --deltas`) the game would take 338.5 MB and 342.4 MB, 17.8 KB a picture's
+record. A clip's sound starts with its pictures; where the source's sound ends before them (a
 few frames in most clips), the frames are silent.

@@ -36,9 +36,12 @@
 //                                     -s 320x200 -r 25 (--truecolor: the
 //                                     scaled picture before its palette, at
 //                                     the same cadence)
-//   dlconv encode CLIP.MPG OUT.DLC [--st] [--keep N]
+//   dlconv encode CLIP.MPG OUT.DLC [--st] [--keep N] [--deltas]
 //                                     the clip converted into the app's clip
-//                                     file (clip.h), its sound included
+//                                     file (clip.h), its sound included,
+//                                     every picture stored whole as the
+//                                     cartridge does (--deltas: against the
+//                                     picture before)
 //   dlconv play FILE.DLC [OUT.rgb]    a clip file read back: checked (CRC-32,
 //                                     records, index), the decode timed, its
 //                                     frames as raw RGB as convert writes
@@ -529,20 +532,29 @@ static int convert_clip(int argc, char **argv) {
 typedef struct {
   FILE *f;
   clip_writer_t w;
-  uint8_t before[200][320];  // the picture before, for the row runs
+  uint8_t before[200][320];  // the picture before, for --deltas
   uint8_t lines[2][320];
   const int8_t *sound;       // the clip's sound, CLIP_SAMPLES a frame
-  uint32_t sound_frames;
+  size_t sound_samples;
+  uint32_t sound_frames;     // frames with sound, the last maybe in part
   uint32_t frame;            // the next frame to write
   uint32_t pictures;
   uint64_t picture_bytes;    // of the pictures' records
   uint32_t record_start;
 } enc_sink_t;
 
+// A frame's sound: the samples there are, the rest silent (past the
+// source's sound, and the end of its last frame).
 static const int8_t *enc_sound(enc_sink_t *k, uint32_t frame) {
-  static const int8_t silence[CLIP_SAMPLES] = {0};
-  return frame < k->sound_frames ? k->sound + (size_t)frame * CLIP_SAMPLES
-                                 : silence;
+  static int8_t samples[CLIP_SAMPLES];
+  size_t at = (size_t)frame * CLIP_SAMPLES;
+  size_t n = at < k->sound_samples ? k->sound_samples - at : 0;
+  n = n > CLIP_SAMPLES ? CLIP_SAMPLES : n;
+  if (n > 0) {
+    memcpy(samples, k->sound + at, n);
+  }
+  memset(samples + n, 0, CLIP_SAMPLES - n);
+  return samples;
 }
 
 static int enc_write(void *ctx, const void *data, uint32_t len) {
@@ -589,11 +601,14 @@ static int encode_clip(int argc, char **argv) {
   const char *out_path = argv[3];
   int bits = 4;
   int keep = CONVERT_KEEP_PERCENT;
+  bool whole = true;
   for (int a = 4; a < argc; a++) {
     if (strcmp(argv[a], "--st") == 0) {
       bits = 3;
     } else if (strcmp(argv[a], "--keep") == 0 && a + 1 < argc) {
       keep = atoi(argv[++a]);
+    } else if (strcmp(argv[a], "--deltas") == 0) {
+      whole = false;
     }
   }
   FILE *in = fopen(clip, "rb");
@@ -641,7 +656,8 @@ static int encode_clip(int argc, char **argv) {
     return 1;
   }
   sink.sound = sound;
-  sink.sound_frames = (uint32_t)(samples / CLIP_SAMPLES);
+  sink.sound_samples = samples;
+  sink.sound_frames = (uint32_t)((samples + CLIP_SAMPLES - 1) / CLIP_SAMPLES);
   // The pictures.
   rewind(in);
   static mpeg_ps_t cps;
@@ -663,7 +679,7 @@ static int encode_clip(int argc, char **argv) {
   h.keep_percent = keep < 0 ? 0xFFFFu : (uint16_t)keep;
   h.source_bytes = source_bytes;
   h.source_crc = source_crc;
-  clip_writer_begin(&sink.w, &io, &h);
+  clip_writer_begin(&sink.w, &io, &h, whole);
   picture16_options_t options = {bits, PICTURE16_WEIGHT_SQRT,
                                  PICTURE16_DITHER_MIX, NULL, NULL};
   convert_out_t out = {enc_begin, enc_lines, enc_end, &sink};
@@ -675,7 +691,7 @@ static int encode_clip(int argc, char **argv) {
   }
   int err = clip_writer_finish(&sink.w);
   uint32_t length = convert_length(&c);
-  printf("%s: %u frames (%u pictures, %u key), %u bytes; pictures %.0f "
+  printf("%s: %u frames (%u pictures, %u indexed), %u bytes; pictures %.0f "
          "bytes on average, largest record %u; sound %u of %u frames; "
          "end %d, writer %d\n",
          out_path, (unsigned)sink.w.header.frames, (unsigned)sink.pictures,
@@ -764,16 +780,20 @@ static int play_clip(const char *path, const char *out_path) {
       decode_us += us;
       worst_us = us > worst_us ? us : worst_us;
     }
-    if (rec.kind == CLIP_KEY) {
+    // The index's entries in turn, each at a key (a whole clip has keys
+    // the index does not list).
+    if (rec.kind == CLIP_KEY && keys < h.index_count) {
       const uint8_t *e = file + h.index_offset + 8u * keys;
       uint32_t kf = e[0] | (e[1] << 8) | (e[2] << 16) | ((uint32_t)e[3] << 24);
       uint32_t ko = e[4] | (e[5] << 8) | (e[6] << 16) | ((uint32_t)e[7] << 24);
-      if (keys >= h.index_count || kf != frame || ko != at) {
-        fprintf(stderr, "frame %u: a key picture not in the index\n",
-                (unsigned)frame);
-        errors++;
+      if (kf == frame) {
+        if (ko != at) {
+          fprintf(stderr, "frame %u: its index entry is at %u, not %u\n",
+                  (unsigned)frame, (unsigned)ko, (unsigned)at);
+          errors++;
+        }
+        keys++;
       }
-      keys++;
     }
     if (rec.palette != NULL) {
       for (int e = 0; e < 16; e++) {
@@ -800,13 +820,15 @@ static int play_clip(const char *path, const char *out_path) {
   }
   if (errors == 0 && (at != h.index_offset || keys != h.index_count ||
                       largest != h.largest_record)) {
-    fprintf(stderr, "records end at %u (index at %u), %u keys of %u, largest "
+    fprintf(stderr, "records end at %u (index at %u), %u keys of %u indexed, "
+            "largest "
             "%u (header %u)\n", (unsigned)at, (unsigned)h.index_offset,
             (unsigned)keys, (unsigned)h.index_count, (unsigned)largest,
             (unsigned)h.largest_record);
     errors++;
   }
-  printf("%s: %s, %u frames, %u pictures (%u key), %ld bytes, largest record "
+  printf("%s: %s, %u frames, %u pictures (%u indexed), %ld bytes, largest "
+         "record "
          "%u; picture decode %.1f us on average, %u us at worst; clip CRC-32 "
          "%08X\n",
          path, errors ? "BAD" : "good", (unsigned)h.frames, (unsigned)pictures,
@@ -855,7 +877,8 @@ int main(int argc, char **argv) {
             "       dlconv cadence CLIP.MPG [-v]\n"
             "       dlconv convert CLIP.MPG [--st] [--keep N] [--truecolor] "
             "[--dump FILE] [-v] [OUT.rgb]\n"
-            "       dlconv encode CLIP.MPG OUT.DLC [--st] [--keep N]\n"
+            "       dlconv encode CLIP.MPG OUT.DLC [--st] [--keep N] "
+            "[--deltas]\n"
             "       dlconv play FILE.DLC [OUT.rgb]\n");
     return 2;
   }

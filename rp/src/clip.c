@@ -285,9 +285,10 @@ static void close_record(clip_writer_t *w) {
 }
 
 int clip_writer_begin(clip_writer_t *w, const clip_io_t *io,
-                      const clip_header_t *header) {
+                      const clip_header_t *header, bool whole) {
   memset(w, 0, sizeof(*w));
   w->io = *io;
+  w->whole = whole;
   w->header = *header;
   w->header.frames = 0;
   w->header.index_offset = 0;
@@ -306,12 +307,13 @@ bool clip_writer_picture(clip_writer_t *w, uint32_t frames,
                          const int8_t sound[CLIP_SAMPLES]) {
   close_record(w);
   w->record_start = w->offset;
-  w->key = force_key || w->frame == 0 ||
-           w->frame - w->last_key >= CLIP_KEY_FRAMES;
+  bool indexed = force_key || w->frame == 0 ||
+                 w->frame - w->last_key >= CLIP_KEY_FRAMES;
+  w->key = indexed || w->whole;
   bool new_palette =
       w->key || !w->have_palette ||
       memcmp(palette, w->palette, sizeof(w->palette)) != 0;
-  if (w->key) {
+  if (indexed) {
     w->last_key = w->frame;
     if (w->header.index_count < CLIP_MAX_KEYS) {
       w->keys[w->header.index_count][0] = w->frame;

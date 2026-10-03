@@ -1,10 +1,12 @@
 // units: rp/src/clip.c rp/src/crc32.c
 /* The clip file, version 1: rows encoded and decoded back to the same
  * pixels, never longer than CLIP_ROW_MAX, malformed rows refused; the
- * header both ways; and a whole clip written and read back: the same
- * pictures, palettes and sounds, a palette only when it changed, a key
- * picture every CLIP_KEY_FRAMES frames and in the index, the CRC-32 of the
- * file in its header. */
+ * header both ways; and a whole clip written and read back, with its
+ * pictures against the ones before and with every picture whole: the same
+ * pictures, palettes and sounds, a palette only when it changed or on a
+ * key, every key picture decoded alone, one in the index every
+ * CLIP_KEY_FRAMES frames and the forced one, the CRC-32 of the file in its
+ * header. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -169,10 +171,9 @@ static void sound_of(uint32_t frame, int8_t out[CLIP_SAMPLES]) {
   }
 }
 
-static void check_clip(void) {
+static void make_pictures(void) {
   // Pictures that change a little from one to the next, a cut now and then;
   // palettes that change on some pictures; 1 to 3 frames each.
-  uint32_t total = 0;
   for (int p = 0; p < PICTURES; p++) {
     for (int y = 0; y < H; y++) {
       for (int x = 0; x < W; x++) {
@@ -189,9 +190,14 @@ static void check_clip(void) {
                                               : palettes[p - 1][e];
     }
     frames_of[p] = 1 + next() % 3;
+  }
+}
+
+static void check_clip(bool whole) {
+  uint32_t total = 0;
+  for (int p = 0; p < PICTURES; p++) {
     total += frames_of[p];
   }
-
   clip_io_t io = {mem_write, mem_header, NULL};
   clip_header_t h = {0};
   h.gun_bits = 4;
@@ -201,14 +207,14 @@ static void check_clip(void) {
   h.source_crc = 0xABCDu;
   static clip_writer_t w;
   file_len = 0;
-  CHECK_EQ(clip_writer_begin(&w, &io, &h), 0);
+  CHECK_EQ(clip_writer_begin(&w, &io, &h, whole), 0);
   uint32_t frame = 0;
   int8_t sound[CLIP_SAMPLES];
   for (int p = 0; p < PICTURES; p++) {
     sound_of(frame++, sound);
     bool key = clip_writer_picture(&w, frames_of[p], palettes[p], p == 30,
                                    sound);
-    CHECK(!(p == 30 && !key));
+    CHECK(key || (!whole && p != 30));
     for (int y = 0; y < H; y++) {
       clip_writer_row(&w, pictures[p][y], p > 0 ? pictures[p - 1][y] : NULL);
     }
@@ -267,17 +273,33 @@ static void check_clip(void) {
       bool changed = p == 0 || memcmp(palettes[p], palettes[p - 1],
                                       sizeof(palettes[p])) != 0;
       CHECK((r.palette != NULL) == (changed || r.kind == CLIP_KEY));
-      if (r.kind == CLIP_KEY) {
-        CHECK(keys < back.index_count);
+      // The index's next entry, if it is this record.
+      bool indexed = false;
+      if (keys < back.index_count) {
         const uint8_t *e = file + back.index_offset + keys * 8u;
-        CHECK_EQ(e[0] | (e[1] << 8) | (e[2] << 16) | ((uint32_t)e[3] << 24),
-                 frame);
-        CHECK_EQ(e[4] | (e[5] << 8) | (e[6] << 16) | ((uint32_t)e[7] << 24),
-                 at);
-        keys++;
-        last_key = frame;
-      } else {
-        CHECK(frame - last_key < CLIP_KEY_FRAMES);
+        uint32_t kf =
+            e[0] | (e[1] << 8) | (e[2] << 16) | ((uint32_t)e[3] << 24);
+        uint32_t ko =
+            e[4] | (e[5] << 8) | (e[6] << 16) | ((uint32_t)e[7] << 24);
+        if (kf == frame) {
+          CHECK_EQ(ko, at);
+          indexed = true;
+          keys++;
+          last_key = frame;
+        }
+      }
+      CHECK(indexed || frame - last_key < CLIP_KEY_FRAMES);
+      CHECK(indexed || p != 30);
+      CHECK_EQ(r.kind, (indexed || whole) ? CLIP_KEY : CLIP_DELTA);
+      // A key alone: onto garbage, the same picture.
+      if (r.kind == CLIP_KEY) {
+        static uint8_t alone[H][W];
+        memset(alone, 0xEE, sizeof(alone));
+        clip_record_t r2;
+        CHECK_EQ(clip_read_record(file + at, back.index_offset - at, &r2,
+                                  &alone[0][0]),
+                 n);
+        CHECK(memcmp(alone, pictures[p], sizeof(alone)) == 0);
       }
     }
     at += (uint32_t)n;
@@ -292,6 +314,8 @@ static void check_clip(void) {
 int main(void) {
   check_rows();
   check_header();
-  check_clip();
+  make_pictures();
+  check_clip(false);
+  check_clip(true);
   TEST_END();
 }

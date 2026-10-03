@@ -38,8 +38,11 @@
 #define DEVHOOKS_APP_SOUND 5      // WORD N [WORD 1]: scene clip N's sound
                                   // decoded and timed (1: played); no word:
                                   // stopped
-#define DEVHOOKS_APP_WRITE_TEST 6  // the card's write rate (a 2 MB scratch
-                                   // file in the folder, then deleted)
+#define DEVHOOKS_APP_WRITE_TEST 6  // [WORD: chunk in sectors] the card's
+                                   // write rate (a 2 MB scratch file in the
+                                   // folder, then deleted)
+#define DEVHOOKS_APP_CONVERT 7     // WORD N: scene clip N converted into
+                                   // BENCH_FOLDER/<clip>.DLC; no word: back
 
 // At boot, before the main loop.
 void bench_init(void);

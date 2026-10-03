@@ -3,9 +3,10 @@
  * Description: The app's converted clip file, version 1 (specified in
  *              docs/clip-format.md): a header, one record per output frame
  *              (its sound, and its picture when a new one starts, as row
- *              runs against the picture before), then an index of the key
- *              pictures. It is written and read in one pass, front to back;
- *              the header alone is rewritten when the clip is finished.
+ *              runs alone or against the picture before), then an index of
+ *              key pictures. It is written and read in one pass, front to
+ *              back; the header alone is rewritten when the clip is
+ *              finished.
  *
  * Plain C, integers only, no allocation: the cartridge and the PC tool
  * write the same bytes, and the player reads them with the same code.
@@ -36,7 +37,7 @@
 #define CLIP_RECORD_MAX \
   (1 + CLIP_PALETTE_BYTES + CLIP_SAMPLES + CLIP_PICTURE_MAX)
 
-// A key picture at least every CLIP_KEY_FRAMES frames (2 s).
+// A key picture in the index at least every CLIP_KEY_FRAMES frames (2 s).
 #define CLIP_KEY_FRAMES 50
 // Key pictures a clip can index: the game's longest clip has 49.
 #define CLIP_MAX_KEYS 256
@@ -121,7 +122,8 @@ typedef struct {
   uint32_t offset;        // bytes written
   uint32_t record_start;  // the record being written's offset
   uint32_t frame;         // the next record's frame
-  uint32_t last_key;      // frame of the last key picture
+  bool whole;             // every picture a key
+  uint32_t last_key;      // frame of the last key picture in the index
   bool key;               // the picture being written is a key
   uint32_t frames_left;   // of the picture being written, after its first
   uint16_t palette[16];   // the palette in the file
@@ -132,13 +134,17 @@ typedef struct {
 
 // Starts a clip: writes a header to be completed by clip_writer_finish().
 // `header` gives its gun_bits, converter, keep_percent and source fields.
+// `whole`: every picture is stored alone, as a key, so no picture before is
+// needed to write it (the index still lists one every CLIP_KEY_FRAMES
+// frames, and the forced ones).
 int clip_writer_begin(clip_writer_t *w, const clip_io_t *io,
-                      const clip_header_t *header);
+                      const clip_header_t *header, bool whole);
 
 // Starts the record of a picture shown for `frames` frames from the next
 // one, with `palette` (16 0x0RGB words). Returns whether it is a key
-// picture (the clip's first, every CLIP_KEY_FRAMES frames, or `force_key`):
-// its rows are then encoded alone. `sound` is the record's first frame's.
+// picture (the clip's first, every CLIP_KEY_FRAMES frames, `force_key`, or
+// any in a whole clip): its rows are then encoded alone. The first three
+// go in the index. `sound` is the record's first frame's.
 bool clip_writer_picture(clip_writer_t *w, uint32_t frames,
                          const uint16_t palette[16], bool force_key,
                          const int8_t sound[CLIP_SAMPLES]);
