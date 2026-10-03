@@ -397,3 +397,14 @@ void fb_publish(void) {
 }
 
 uint32_t fb_last_convert_us(void) { return last_convert_us; }
+
+bool fb_wait_shown(uint32_t timeout_us) {
+  uint32_t t0 = time_us_32();
+  while (s_vbl_seen == s_vbl_published) {
+    fb_pump_rom3();
+    if (time_us_32() - t0 > timeout_us) {
+      return false;
+    }
+  }
+  return true;
+}
