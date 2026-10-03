@@ -131,6 +131,7 @@ typedef struct {
   uint8_t indices[OUT_H][OUT_W];
   uint32_t crcs[MAX_PICTURES];
   uint32_t firsts[MAX_PICTURES];
+  uint32_t frames[MAX_PICTURES];
   int count;
   int lines;  // index lines received for the current picture
   // With palette stability: each picture's colours, its palette, and
@@ -156,10 +157,22 @@ static void sink_lines(void *ctx, int line, const uint8_t *indices,
   k->lines += 2;
 }
 
-static void sink_picture(void *ctx, const picture16_palette_t *palette,
-                         uint32_t first_frame) {
+static void sink_begin(void *ctx, const convert_picture_t *picture) {
   sink_t *k = (sink_t *)ctx;
+  CHECK_EQ(k->lines, 0);
+  CHECK(picture->frames >= 1);
+  CHECK(picture->type == MPEG1_PICTURE_I || picture->type == MPEG1_PICTURE_P);
+}
+
+static void sink_end(void *ctx, const convert_picture_t *picture) {
+  sink_t *k = (sink_t *)ctx;
+  const picture16_palette_t *palette = picture->palette;
+  uint32_t first_frame = picture->first_frame;
   CHECK_EQ(k->lines, OUT_H);
+  if (k->count > 0) {
+    CHECK_EQ(k->firsts[k->count - 1] + k->frames[k->count - 1], first_frame);
+  }
+  k->frames[k->count] = picture->frames;
   k->lines = 0;
   CHECK(k->count < MAX_PICTURES);
   k->crcs[k->count] = picture_crc(&k->indices[0][0], palette);
@@ -205,7 +218,7 @@ static void check_options(const picture16_options_t *options) {
   mpeg1_init(&m, &ps);
   give_slots(&m);
   memset(&sink, 0, sizeof(sink));
-  convert_out_t out = {sink_lines, sink_picture, &sink};
+  convert_out_t out = {sink_begin, sink_lines, sink_end, &sink};
   convert_t c;
   convert_init(&c, &m, ring, lines, work, options, &out);
   int type;
@@ -223,6 +236,7 @@ static void check_options(const picture16_options_t *options) {
     }
   }
   CHECK_EQ(convert_length(&c), 51u);
+  CHECK_EQ(sink.firsts[sink.count - 1] + sink.frames[sink.count - 1], 51u);
 }
 
 // The clip at `path` through the converter, its pictures into `sink`.
@@ -243,7 +257,7 @@ static uint32_t run(const char *path, const picture16_options_t *options,
   mpeg1_init(&m, &ps);
   give_slots(&m);
   memset(sink, 0, sizeof(*sink));
-  convert_out_t out = {sink_lines, sink_picture, sink};
+  convert_out_t out = {sink_begin, sink_lines, sink_end, sink};
   convert_init(&c, &m, ring, lines, work, options, &out);
   c.keep_percent = keep_percent;
   sink->c = &c;

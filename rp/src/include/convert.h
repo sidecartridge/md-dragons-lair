@@ -8,7 +8,11 @@
  *
  * The first pass runs in the decoder's row callback, as the rows come out;
  * the second reads the picture back from the frame store before the next
- * picture's decode starts. No scaled picture is kept.
+ * picture's decode starts. No scaled picture is kept. Between the two, the
+ * next I or P picture's header is read (the B pictures before it skipped,
+ * which leaves the store alone), so a picture's frames are known before its
+ * second pass; a picture shown for no frame is decoded (the next one needs
+ * it) but not converted.
  *
  * Palette stability (keep_percent >= 0), so that what did not move costs
  * nothing from one frame to the next: a picture is dithered with the
@@ -35,21 +39,32 @@
 #include "mpeg1_video.h"
 #include "picture16.h"
 
+// The game's palette stability (keep_percent): measured on the whole game
+// against ffmpeg's recipe held to the machine's colours, and chosen by eye.
+#define CONVERT_KEEP_PERCENT 10
+
 enum {
   CONVERT_ERR_RATE = -20,  // a picture rate MPEG-1 does not define
   CONVERT_ERR_SIZE = -21,  // not 352x240
 };
 
+// A picture handed out.
 typedef struct {
-  // The picture being converted, two index lines at a time (as
-  // picture16_lines_fn).
+  int type;                // MPEG1_PICTURE_I or MPEG1_PICTURE_P
+  uint32_t display_index;  // its place in the clip's display order
+  uint32_t first_frame;    // shown from this output frame
+  uint32_t frames;         // for this many, one at least
+  // Its palette: with palette stability, all 16 slots as shown.
+  const picture16_palette_t *palette;
+} convert_picture_t;
+
+typedef struct {
+  // Before the picture's lines.
+  void (*begin)(void *ctx, const convert_picture_t *picture);
+  // Its index lines, two at a time (as picture16_lines_fn).
   picture16_lines_fn lines;
-  // After its lines: the picture is shown from output frame `first_frame`
-  // until the next picture's first frame (or the clip's length). Its type
-  // and display position are in the decoder. With palette stability the
-  // palette has all 16 slots.
-  void (*picture)(void *ctx, const picture16_palette_t *palette,
-                  uint32_t first_frame);
+  // After them.
+  void (*end)(void *ctx, const convert_picture_t *picture);
   void *ctx;
 } convert_out_t;
 
@@ -66,6 +81,10 @@ typedef struct {
   uint32_t den;
   uint32_t last_display;  // the last display position seen so far
   uint32_t pictures;      // pictures converted
+  uint32_t hidden;        // decoded, shown for no frame
+  bool started;
+  int pending;            // the next I or P picture's type, 0: the end
+  uint32_t pending_display;
   picture16_palette_t palette;  // the picture's own
   // Palette stability: -1 (convert_init's) off, each picture with its own
   // palette in its own order, as picture16_convert() gives it.
