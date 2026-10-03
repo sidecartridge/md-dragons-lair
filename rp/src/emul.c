@@ -43,6 +43,18 @@
  * worth copying. Apps that need a fixed cadence can add their own
  * sleep_ms / sleep_until call here. */
 
+// SELECT's restarts, with the SD card left idle first: a restart during its
+// writes leaves it unanswering until it loses power (bench_stop_card_work()).
+static void select_reset(void) {
+  bench_stop_card_work();
+  reset_device();
+}
+
+static void select_long_reset(void) {
+  bench_stop_card_work();
+  reset_deviceAndEraseFlash();
+}
+
 void emul_start() {
   // RP2040 RAM is undefined at power-on; firmware.py only emits the
   // bytes up to the last non-zero in BOOT.BIN (padded to 64 KB), so
@@ -129,8 +141,8 @@ void emul_start() {
   // every app's settings). select_poll() in the main loop runs them; it
   // never blocks.
   select_configure();
-  select_setResetCallback(reset_device);
-  select_setLongResetCallback(reset_deviceAndEraseFlash);
+  select_setResetCallback(select_reset);
+  select_setLongResetCallback(select_long_reset);
 
   // The SD card, where md-microfirmware-template starts it: mounted, the
   // app's folder created when it is missing, the image found and its root

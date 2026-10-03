@@ -1505,6 +1505,7 @@ static void conv_draw(void) {
   if (!s_cv.done) {
     text(0, 14, C_DIM, "THE SCREEN STAYS AS IT IS: THE BAR");
     text(0, 15, C_DIM, "FILLS AS THE CLIP IS READ");
+    text(0, 24, C_DIM, "SPACE: STOP");
     return;
   }
   const conv_results_t *r = &convResults;
@@ -1709,7 +1710,12 @@ static void conv_frame(void) {
   }
 }
 
+// Back to the bench; a conversion still running is stopped first, its clip
+// file closed and left incomplete.
 static void conv_stop(void) {
+  if (!s_cv.done && s_cv.job != NULL) {
+    convjob_abort(s_cv.job);
+  }
   conv_release_heap();
   s_cv.active = false;
   palette_set(bench_palette);
@@ -1753,10 +1759,24 @@ void bench_start_sd(void) {
 }
 
 void bench_restart(void) {
+  // A conversion still running is stopped: its screen cannot be drawn again
+  // (it works in the framebuffers' memory), and the ST shows the bench live.
+  if (s_cv.active && !s_cv.done) {
+    conv_stop();
+  }
   palette_set(s_cv.active   ? conv_palette(s_cv.lit)
               : s_show.active ? show_palette()
                               : bench_palette);
   s_dirty = true;
+}
+
+void bench_stop_card_work(void) {
+  if (s_cv.active && !s_cv.done && s_cv.job != NULL) {
+    convjob_abort(s_cv.job);  // the clip file closed: synced, the card idle
+  }
+  if (s_write.active) {
+    write_end(FR_OK);
+  }
 }
 
 void bench_handle_key(const ikbd_key_event_t *key) {
@@ -1770,7 +1790,7 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     return;
   }
   if (s_cv.active) {
-    if (key->scancode == 0x39 && s_cv.done) {  // space: back to the bench
+    if (key->scancode == 0x39) {  // space: stop, or back to the bench
       conv_stop();
     }
     return;
@@ -1959,7 +1979,7 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
                    payload_size >= 4u && (payload[1] == 3 || payload[1] == 4)
                        ? (int)payload[1]
                        : 0);
-      } else if (s_cv.active && s_cv.done) {
+      } else if (s_cv.active) {
         conv_stop();
       }
       return 1;

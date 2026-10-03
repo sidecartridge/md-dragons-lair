@@ -54,8 +54,14 @@ void bench_init(void);
 // image and reads its root directory.
 void bench_start_sd(void);
 
-// A new ST session: draw the screen again.
+// A new ST session: draw the screen again (a conversion still running is
+// stopped).
 void bench_restart(void);
+
+// Before the RP restarts: the card left idle, no file being written (a
+// restart during the card's writes leaves it unanswering until it loses
+// power: its chip select is fixed on this board).
+void bench_stop_card_work(void);
 
 void bench_handle_key(const ikbd_key_event_t *key);
 
