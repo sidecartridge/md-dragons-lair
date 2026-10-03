@@ -16,12 +16,16 @@
 //                                     picture16 at 320x200, for an STE (4,096
 //                                     colours) and an ST (512), with each
 //                                     dither: OUT_N_{ste,st}_DITHER.ppm
+//   dlconv cadence CLIP.MPG [-v]      the clip at 25 frames a second: its
+//                                     length, and the frames each I and P
+//                                     picture covers (-v: one line each)
 
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "cadence.h"
 #include "crc32.h"
 #include "mp2_audio.h"
 #include "mpeg1_video.h"
@@ -196,12 +200,100 @@ static int audio(const char *clip, const char *out_path) {
   return 0;
 }
 
+// The cadence of a clip, from its picture headers alone: which output
+// frames each I and P picture covers, as the converter will show them.
+static int cadence(const char *clip, bool verbose) {
+  FILE *in = fopen(clip, "rb");
+  if (in == NULL) {
+    perror(clip);
+    return 1;
+  }
+  static mpeg_ps_t cps;
+  static mpeg1_t cdec;
+  mpeg_ps_init(&cps, read_file, in);
+  mpeg1_init(&cdec, &cps);
+  static uint32_t shown[1u << 16];  // display index of each I and P picture
+  static char shown_type[1u << 16];
+  uint32_t count = 0;
+  uint32_t last = 0;  // the last display position
+  static bool used[1u << 16];
+  int counts[5] = {0};
+  int refused = 0;  // P pictures whose vectors the frame store cannot hold
+  int type;
+  while ((type = mpeg1_next_picture(&cdec)) > 0) {
+    if (type <= 4) {
+      counts[type]++;
+    }
+    bool keep = type == MPEG1_PICTURE_I ||
+                (type == MPEG1_PICTURE_P && cdec.forward_f_code <= 2);
+    refused += type == MPEG1_PICTURE_P && !keep;
+    if (cdec.display_index > last) {
+      last = cdec.display_index;
+    }
+    if (cdec.display_index < (1u << 16)) {
+      used[cdec.display_index] = true;
+    }
+    if (keep && count < (1u << 16)) {
+      shown_type[count] = type == MPEG1_PICTURE_I ? 'I' : 'P';
+      shown[count++] = cdec.display_index;
+    }
+    mpeg1_skip_picture(&cdec);
+  }
+  fclose(in);
+  uint32_t num = 0;
+  uint32_t den = 0;
+  if (count == 0 || !cadence_picture_rate(cdec.picture_rate, &num, &den)) {
+    fprintf(stderr, "%s: no pictures, or picture rate code %d\n", clip,
+            cdec.picture_rate);
+    return 1;
+  }
+  uint32_t length = cadence_first_frame(last + 1u, num, den);
+  uint32_t missing = 0;
+  for (uint32_t k = 0; k <= last && k < (1u << 16); k++) {
+    missing += !used[k];
+  }
+  uint32_t histogram[8] = {0};
+  uint32_t out_of_order = 0;
+  for (uint32_t i = 0; i < count; i++) {
+    // Frames before the first picture shown show it too.
+    uint32_t first = (i == 0) ? 0 : cadence_first_frame(shown[i], num, den);
+    uint32_t end = (i + 1 < count) ? cadence_first_frame(shown[i + 1], num, den)
+                                   : length;
+    out_of_order += i > 0 && shown[i] <= shown[i - 1];
+    uint32_t frames = end > first ? end - first : 0;
+    histogram[frames < 7 ? frames : 7]++;
+    if (verbose) {
+      printf("%c %5u  frames %5u..%5u  (%u)\n", shown_type[i],
+             (unsigned)shown[i], (unsigned)first, (unsigned)end,
+             (unsigned)frames);
+    }
+  }
+  printf("%u pictures (%d I, %d P, %d B; %d P refused; %u display positions "
+         "missing) at %u/%u a second: %u frames at %u; %u pictures shown, "
+         "first at %u; frames each:",
+         (unsigned)cdec.stats.pictures, counts[1], counts[2], counts[3],
+         refused, (unsigned)missing, (unsigned)num, (unsigned)den,
+         (unsigned)length,
+         (unsigned)CADENCE_FPS, (unsigned)count, (unsigned)shown[0]);
+  for (int f = 0; f < 8; f++) {
+    if (histogram[f] != 0) {
+      printf(" %d%s x %u", f, f == 7 ? "+" : "", (unsigned)histogram[f]);
+    }
+  }
+  printf("%s\n", out_of_order ? " OUT OF ORDER" : "");
+  return out_of_order ? 1 : 0;
+}
+
 static mpeg_ps_t ps;
 static mpeg1_t dec;
 
 int main(int argc, char **argv) {
   if (argc >= 5 && strcmp(argv[1], "preview") == 0) {
     return preview(argc, argv);
+  }
+  if ((argc == 3 || (argc == 4 && strcmp(argv[3], "-v") == 0)) &&
+      strcmp(argv[1], "cadence") == 0) {
+    return cadence(argv[2], argc == 4);
   }
   if ((argc == 3 || argc == 4) && strcmp(argv[1], "audio") == 0) {
     return audio(argv[2], argc == 4 ? argv[3] : NULL);
@@ -214,7 +306,8 @@ int main(int argc, char **argv) {
             "usage: dlconv iframes|ipframes CLIP.MPG OUT.yuv\n"
             "       dlconv ipcrc CLIP.MPG\n"
             "       dlconv preview CLIP.MPG OUT N...\n"
-            "       dlconv audio CLIP.MPG [OUT.s16]\n");
+            "       dlconv audio CLIP.MPG [OUT.s16]\n"
+            "       dlconv cadence CLIP.MPG [-v]\n");
     return 2;
   }
   FILE *in = fopen(argv[2], "rb");

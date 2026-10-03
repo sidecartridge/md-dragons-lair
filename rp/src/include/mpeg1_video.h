@@ -125,12 +125,19 @@ typedef struct {
   int mb_cols;
   int mb_rows;
   int stride;  // 16 * mb_cols
+  int picture_rate;  // the header's code: 4 is 30000 / 1001 a second
   uint8_t intra_q[64];      // natural order
   uint8_t non_intra_q[64];  // natural order
 
   // Picture.
   int picture_type;
   int temporal_reference;
+  // The picture's place in display order, from 0 at the stream's first:
+  // its group's start plus its temporal reference. Decode order differs:
+  // a reference picture comes before the B pictures shown ahead of it.
+  uint32_t display_index;
+  uint32_t group_start;     // display index of the group's first picture
+  uint32_t group_pictures;  // pictures of the group seen so far
   int forward_f_code;
   bool full_pel_forward;
 

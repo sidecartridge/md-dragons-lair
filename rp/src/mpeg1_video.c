@@ -41,6 +41,7 @@
 #define SC_SLICE_LAST 0xAF
 #define SC_SEQUENCE 0xB3
 #define SC_SEQUENCE_END 0xB7
+#define SC_GROUP 0xB8
 
 #define MB_INTRA 0x01u
 #define MB_PATTERN 0x02u
@@ -438,7 +439,7 @@ static int parse_sequence_header(mpeg1_t *m) {
   int width = (int)br_get(m, 12);
   int height = (int)br_get(m, 12);
   br_get(m, 4);   // pel aspect ratio
-  br_get(m, 4);   // picture rate
+  int picture_rate = (int)br_get(m, 4);
   br_get(m, 18);  // bit rate
   br_get(m, 1);   // marker
   br_get(m, 10);  // VBV buffer size
@@ -468,6 +469,7 @@ static int parse_sequence_header(mpeg1_t *m) {
   m->mb_cols = (width + 15) / 16;
   m->mb_rows = (height + 15) / 16;
   m->stride = m->mb_cols * 16;
+  m->picture_rate = picture_rate;
   m->have_sequence = true;
   return 0;
 }
@@ -1053,16 +1055,21 @@ int mpeg1_next_picture(mpeg1_t *m) {
       if (result < 0) {
         return result;
       }
+    } else if (code == SC_GROUP) {
+      // A group's temporal references count from its first picture shown.
+      m->group_start += m->group_pictures;
+      m->group_pictures = 0;
     } else if (code == SC_PICTURE) {
       if (!m->have_sequence) {
         continue;  // a picture before any sequence header: unusable
       }
       parse_picture_header(m);
+      m->display_index = m->group_start + (uint32_t)m->temporal_reference;
+      m->group_pictures++;
       m->stats.pictures++;
       return m->picture_type;
     }
-    // Group of pictures, user data, extensions, slices of a skipped
-    // picture: nothing to do.
+    // User data, extensions, slices of a skipped picture: nothing to do.
   }
 }
 
