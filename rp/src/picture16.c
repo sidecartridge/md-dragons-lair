@@ -597,7 +597,7 @@ static uint8_t mix_choose(const mix_t *mix, int bin) {
   // The MIX_CANDIDATES nearest entries, nearest first, a tie to the lower
   // entry: keys of distance << 4 | entry, in order.
   int diff[MAX_COLOURS][3];  // colour - entry
-  uint32_t near[MIX_CANDIDATES];
+  uint32_t near[MIX_CANDIDATES] = {0};  // n >= 1: near[0] is always set
   int found = 0;
   for (int i = 0; i < mix->n; i++) {
     int *d = diff[i];

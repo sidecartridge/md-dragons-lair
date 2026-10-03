@@ -233,7 +233,7 @@ static void build_image(void) {
   dir_writer_t root = {img + LBA_ROOT * BS, 0};
   add_dots(&root, LBA_ROOT, 2 * BS, LBA_ROOT, 2 * BS);
   for (int i = 0; i < FILE_COUNT; i++) {
-    char name[16];
+    char name[24];  // room for any int, as gcc checks
     snprintf(name, sizeof(name), "FILE%02d.TXT;1", i);
     file_records[i] = add_iso(&root, name, LBA_FILES + (uint32_t)i,
                               100u + (uint32_t)i, 0);
