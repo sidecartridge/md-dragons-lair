@@ -6,7 +6,10 @@
  * pictures, palettes and sounds, a palette only when it changed or on a
  * key, every key picture decoded alone, one in the index every
  * CLIP_KEY_FRAMES frames and the forced one, the CRC-32 of the file in its
- * header. */
+ * header. Then that file damaged: a record cut short anywhere is refused,
+ * reading nothing past what it was given; bytes changed at random make a
+ * record refused or wrong, never a read or write outside the buffers (the
+ * sanitizers), and always a CRC-32 that is not the header's. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -311,11 +314,81 @@ static void check_clip(bool whole) {
   CHECK(largest <= CLIP_RECORD_MAX);
 }
 
+// --- A damaged file -------------------------------------------------------------
+
+// Parses the record at `at` from a copy holding exactly `len` bytes of it,
+// so that the sanitizers catch a read past them.
+static size_t parse_cut(uint32_t at, size_t len, uint8_t *pixels) {
+  uint8_t *copy = malloc(len > 0 ? len : 1);
+  memcpy(copy, file + at, len);
+  clip_record_t r;
+  size_t n = clip_read_record(copy, len, &r, pixels);
+  free(copy);
+  return n;
+}
+
+static void check_damage(void) {
+  clip_header_t h;
+  CHECK_EQ(clip_header_read(&h, file), 0);
+  static uint8_t pixels[H][W];
+  // The first records of each kind, cut at every length short of their
+  // size (every 61st byte past the first thousand of a picture).
+  uint32_t at = CLIP_HEADER_BYTES;
+  bool seen[3] = {false, false, false};
+  for (uint32_t frame = 0; frame < h.frames; frame++) {
+    clip_record_t r;
+    size_t n = clip_read_record(file + at, h.index_offset - at, &r,
+                                &pixels[0][0]);
+    CHECK(n > 0);
+    if (n == 0) {
+      return;
+    }
+    if (!seen[r.kind]) {
+      seen[r.kind] = true;
+      CHECK_EQ(parse_cut(at, n, &pixels[0][0]), n);
+      for (size_t cut = 0; cut < n; cut += (cut < 1000u) ? 1u : 61u) {
+        CHECK_EQ(parse_cut(at, cut, &pixels[0][0]), (size_t)0);
+      }
+    }
+    at += (uint32_t)n;
+  }
+  CHECK(seen[CLIP_HELD] && seen[CLIP_KEY]);
+
+  // Bytes changed at random: every record parsed from a buffer of the
+  // records' exact size, whatever it holds.
+  uint32_t records = h.index_offset - CLIP_HEADER_BYTES;
+  uint8_t *damaged = malloc(records);
+  for (int t = 0; t < 40; t++) {
+    memcpy(damaged, file + CLIP_HEADER_BYTES, records);
+    int changes = 1 + (int)(next() % 8);
+    for (int c = 0; c < changes; c++) {
+      uint32_t i = (uint32_t)((next() << 16 | next()) % records);
+      damaged[i] = (uint8_t)(damaged[i] ^ (1u + next() % 255u));
+    }
+    CHECK(crc32_update(0, damaged, records) !=
+          crc32_update(0, file + CLIP_HEADER_BYTES, records));
+    uint32_t pos = 0;
+    for (uint32_t frame = 0; frame < h.frames && pos < records; frame++) {
+      clip_record_t r;
+      size_t n = clip_read_record(damaged + pos, records - pos, &r,
+                                  &pixels[0][0]);
+      if (n == 0) {
+        break;  // refused: the player stops the clip
+      }
+      CHECK(n <= records - pos);
+      pos += (uint32_t)n;
+    }
+  }
+  free(damaged);
+}
+
 int main(void) {
   check_rows();
   check_header();
   make_pictures();
   check_clip(false);
+  check_damage();
   check_clip(true);
+  check_damage();
   TEST_END();
 }

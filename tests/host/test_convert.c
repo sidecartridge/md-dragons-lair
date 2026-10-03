@@ -1,4 +1,4 @@
-// units: rp/src/convert.c rp/src/cadence.c rp/src/mpeg1_video.c rp/src/mpeg_ps.c rp/src/picture16.c rp/src/crc32.c
+// units: rp/src/convert.c rp/src/cadence.c rp/src/mpeg1_video.c rp/src/mpeg_ps.c rp/src/picture16.c rp/src/crc32.c rp/src/clip.c
 /* The clip converter on a synthetic clip with B pictures and open groups
  * (data/ibp_352x240.mpg): every I and P picture converted in two passes over
  * the decoder's frame store gives the indices and the palette that the whole
@@ -8,7 +8,11 @@
  * its entries in their slots, or shows the same colours as with its own
  * palette, pixel for pixel; and a still
  * clip (data/still_352x240.mpg) keeps its palette and its indices from its
- * first picture on. */
+ * first picture on. Last, the clip converted into a clip file as the
+ * cartridge writes it, for an ST and an STE: the file's CRC-32 is the one
+ * dlconv encode gives built by Apple clang and by GCC, so the converter's
+ * integers are the same on every host and compiler (it changes with the
+ * converter's output or the format: then dlconv encode gives the new one). */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +20,7 @@
 
 #include "cadence.h"
 #include "convert.h"
+#include "clip.h"
 #include "crc32.h"
 #include "test.h"
 
@@ -326,6 +331,93 @@ static void check_stability(void) {
   }
 }
 
+// --- The clip file ---------------------------------------------------------------
+
+static uint8_t clip_file[256u << 10];
+static uint32_t clip_len;
+
+static int file_write(void *ctx, const void *data, uint32_t len) {
+  (void)ctx;
+  if (clip_len + len > sizeof(clip_file)) {
+    return -1;
+  }
+  memcpy(clip_file + clip_len, data, len);
+  clip_len += len;
+  return 0;
+}
+
+static int file_header(void *ctx, const uint8_t header[CLIP_HEADER_BYTES]) {
+  (void)ctx;
+  memcpy(clip_file, header, CLIP_HEADER_BYTES);
+  return 0;
+}
+
+static const int8_t silence[CLIP_SAMPLES];  // the clip has no sound
+
+static void file_begin(void *ctx, const convert_picture_t *picture) {
+  clip_writer_picture((clip_writer_t *)ctx, picture->frames,
+                      picture->palette->rgb444, false, silence);
+}
+
+static void file_lines(void *ctx, int line, const uint8_t *indices,
+                       int width) {
+  (void)line;
+  clip_writer_row((clip_writer_t *)ctx, indices, NULL);
+  clip_writer_row((clip_writer_t *)ctx, indices + width, NULL);
+}
+
+static void file_end(void *ctx, const convert_picture_t *picture) {
+  for (uint32_t f = 1; f < picture->frames; f++) {
+    clip_writer_held((clip_writer_t *)ctx, silence);
+  }
+}
+
+static void check_clip_file(int bits, uint32_t expected) {
+  static _Alignas(4) uint8_t ring_c[PICTURE16_RING_C_BYTES];
+  static _Alignas(4) uint8_t lines_y[PICTURE16_LINES_Y_BYTES];
+  static mpeg_ps_t ps;
+  static mpeg1_t m;
+  static convert_t c;
+  static clip_writer_t w;
+  static uint8_t source[64u << 10];
+  FILE *f = fopen("data/ibp_352x240.mpg", "rb");
+  CHECK(f != NULL);
+  if (f == NULL) {
+    return;
+  }
+  size_t source_bytes = fread(source, 1, sizeof(source), f);
+  CHECK(source_bytes < sizeof(source));
+  rewind(f);
+  clip_len = 0;
+  clip_io_t io = {file_write, file_header, NULL};
+  clip_header_t h = {0};
+  h.gun_bits = (uint8_t)bits;
+  h.converter = CONVERT_VERSION;
+  h.keep_percent = CONVERT_KEEP_PERCENT;
+  h.source_bytes = (uint32_t)source_bytes;
+  h.source_crc = crc32_update(0, source, source_bytes);
+  CHECK_EQ(clip_writer_begin(&w, &io, &h, true), 0);
+  mpeg_ps_init(&ps, read_file, f);
+  mpeg1_init(&m, &ps);
+  give_slots(&m);
+  picture16_options_t o = {bits, PICTURE16_WEIGHT_SQRT, PICTURE16_DITHER_MIX,
+                           NULL, NULL};
+  convert_out_t out = {file_begin, file_lines, file_end, &w};
+  convert_init(&c, &m, ring_c, lines_y, &o, &out);
+  c.keep_percent = CONVERT_KEEP_PERCENT;
+  int type;
+  while ((type = convert_next(&c)) > 0) {
+  }
+  fclose(f);
+  CHECK_EQ(type, 0);
+  CHECK_EQ(clip_writer_finish(&w), 0);
+  uint32_t crc = crc32_update(0, clip_file, clip_len);
+  printf("The clip file for %d bits a gun: %u bytes, CRC-32 %08X (expected "
+         "%08X)\n",
+         bits, (unsigned)clip_len, (unsigned)crc, (unsigned)expected);
+  CHECK_EQ(crc, expected);
+}
+
 int main(void) {
   static uint8_t work2[PICTURE16_WORK_BYTES];
   picture16_run2_fn runs[3] = {NULL, run_ab, run_ba};
@@ -338,6 +430,8 @@ int main(void) {
     }
   }
   check_stability();
+  check_clip_file(3, 0x4C28D36Du);
+  check_clip_file(4, 0xC0684153u);
   for (int i = 0; i < (int)MPEG1_MAX_SLOTS; i++) {
     free(slots[i]);
   }

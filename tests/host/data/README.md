@@ -42,3 +42,16 @@ same):
 ffmpeg -f lavfi -i "smptebars=size=352x240:rate=30000/1001:duration=1" \
        -c:v mpeg1video -bf 2 -g 30 -q:v 8 -f mpeg still_352x240.mpg
 ```
+
+A small clip for `test_mpeg1_video.c` whose picture moves at every edge (a 64x48 window
+swinging over a test pattern, slow enough for the decoder's 16-pixel vectors), and ffmpeg's
+decoding of its I and P pictures as the reference:
+
+```sh
+ffmpeg -f lavfi -i "testsrc2=size=176x144:rate=30000/1001:duration=2" \
+       -vf "crop=64:48:x='56+24*sin(n/6)':y='48+18*cos(n/5)'" \
+       -c:v mpeg1video -bf 2 -g 12 -q:v 2 -me_range 12 -sc_threshold 1000000000 \
+       -f mpeg edge_64x48.mpg
+ffmpeg -i edge_64x48.mpg -vf "select='not(eq(pict_type\,B))'" -fps_mode passthrough \
+       -f rawvideo -pix_fmt yuv420p edge_64x48.ref.yuv
+```
