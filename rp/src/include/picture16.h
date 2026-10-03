@@ -20,6 +20,7 @@
 #ifndef PICTURE16_H
 #define PICTURE16_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 // The histogram (4,096 bins of 16 bits); later the colour-to-index table.
@@ -129,6 +130,15 @@ typedef struct {
   int next_c;
   int lanczos;  // 0: nearest pixel
   picture16_run2_fn run2;  // two cores (NULL: one); set after init
+  // Set after init, Lanczos only. Output lines into rings instead of whole
+  // planes (0: whole planes): luma line o at out_y + (o % out_lines) *
+  // out_w, chroma line c at out_cb / out_cr + (c % (out_lines / 2)) *
+  // (out_w / 2). `rows`, when set, gets the chroma rows [c0, c1) completed
+  // by each batch (their chroma lines and both their luma lines).
+  int out_lines;
+  void (*rows)(void *ctx, int c0, int c1);
+  void *rows_ctx;
+  int done_c;  // chroma rows handed to `rows` so far
 } picture16_scaler_t;
 
 // `ring` is PICTURE16_SCALER_BYTES, 4-byte aligned; out_cb and out_cr are
@@ -139,5 +149,59 @@ void picture16_scaler_init(picture16_scaler_t *s, int src_w, int src_h,
 void picture16_scaler_mb_row(picture16_scaler_t *s, int mb_row,
                              const uint8_t *y, const uint8_t *cb,
                              const uint8_t *cr, int stride);
+
+// --- Two passes ---------------------------------------------------------------
+//
+// A picture of the game's size (352x240 to 320x200) converted without
+// keeping it scaled. Its source rows are fed twice: as the decoder hands them
+// out, then again from the decoder's frame store, which still holds the
+// picture. The first pass scales them into the histogram; the palette is
+// chosen; the second scales them again and dithers, handing out the index
+// lines as they are done. The result is picture16_convert()'s on the whole
+// scaled picture, byte for byte.
+
+// The scaled lines kept between the scaler and the passes: luma, and half
+// as many of each chroma plane.
+#define PICTURE16_LINES 16
+#define PICTURE16_LINES_BYTES (PICTURE16_LINES * 320u + PICTURE16_LINES * 160u)
+
+// Gets index lines `line` and `line + 1`, `width` bytes each and `width`
+// apart, colour indices 0..15.
+typedef void (*picture16_lines_fn)(void *ctx, int line,
+                                   const uint8_t *indices, int width);
+
+typedef struct {
+  picture16_scaler_t scaler;
+  picture16_options_t options;
+  uint8_t *ring;
+  uint8_t *lines;
+  void *work;
+  int pass;  // 1: the histogram, 2: the dither
+  picture16_lines_fn lines_fn;
+  void *lines_ctx;
+  picture16_profile_t *profile;
+} picture16_passes_t;
+
+// Starts the first pass. `ring` is PICTURE16_SCALER_BYTES and `lines`
+// PICTURE16_LINES_BYTES, both 4-byte aligned; `work` (and options->work2)
+// as picture16_convert()'s. `profile` (or NULL) gets each stage's time, the
+// histogram's and the dither's added up over their rows. False for another
+// size than 352x240.
+bool picture16_passes_init(picture16_passes_t *p, int src_w, int src_h,
+                           uint8_t *ring, uint8_t *lines, void *work,
+                           const picture16_options_t *options,
+                           picture16_profile_t *profile);
+
+// One source macroblock row to the current pass, the rows in order (16 luma
+// lines `stride` apart, 8 of each chroma plane `stride / 2` apart).
+void picture16_passes_mb_row(picture16_passes_t *p, int mb_row,
+                             const uint8_t *y, const uint8_t *cb,
+                             const uint8_t *cr, int stride);
+
+// Ends the first pass: chooses the palette, then starts the second, whose
+// index lines go to `lines_fn`.
+void picture16_passes_palette(picture16_passes_t *p,
+                              picture16_palette_t *palette,
+                              picture16_lines_fn lines_fn, void *lines_ctx);
 
 #endif  // PICTURE16_H
