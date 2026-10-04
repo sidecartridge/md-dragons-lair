@@ -80,6 +80,8 @@ typedef struct {
   iso9660_file_t audio_file;
   FIL out;
   int gun_bits;
+  const uint16_t *keys;    // frames to list as key pictures, ascending
+  uint16_t key_count;
   uint32_t source_crc;     // of the clip as the pictures are read
   uint64_t video_read;     // microseconds reading the pictures
   uint32_t sound_samples;  // decoded and not yet in a record
@@ -95,13 +97,16 @@ typedef struct {
 } convjob_t;
 
 // Starts converting the clip `entry` of `iso` into `out_path`, for a
-// palette of `gun_bits` (3: an ST, 4: an STE). `run2` puts work on the
-// second core (NULL: one core),
+// palette of `gun_bits` (3: an ST, 4: an STE). `keys` (`key_count`
+// frames, ascending; NULL: none) are listed as key pictures in the clip's
+// index, the picture shown at each (the game's sequence starts:
+// game_starts). `run2` puts work on the second core (NULL: one core),
 // `cycles` (or NULL) is a free-running cycle counter for the passes'
 // profile. Returns 0 or a negative error.
 int convjob_start(convjob_t *j, const convjob_memory_t *memory,
                   iso9660_t *iso, const iso9660_entry_t *entry,
                   const char *out_path, int gun_bits,
+                  const uint16_t *keys, uint16_t key_count,
                   picture16_run2_fn run2,
                   uint32_t (*cycles)(void));
 

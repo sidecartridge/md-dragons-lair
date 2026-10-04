@@ -78,11 +78,37 @@ def main():
     w("")
     w("#include <stddef.h>")
     w("")
+    # Each clip's sequence starts, the frames to list as keys.
+    starts = {c: sorted({p["frame"] for p in placed.values() if p["clip"] == c}) for c in clips}
+    first = 0
     w("const game_clip_t game_clips[] = {")
     for c in clips:
-        w("    {%s, %d}," % (c_string(c), frames[c]))
+        w("    {%s, %d, %d, %d}," % (c_string(c), frames[c], first, len(starts[c])))
+        first += len(starts[c])
     w("};")
     w("const uint16_t game_clip_count = %d;" % len(clips))
+    w("")
+    w("const uint16_t game_starts[] = {")
+    for c in clips:
+        if starts[c]:
+            w("    %s,  // %s" % (", ".join(str(f) for f in starts[c]), c))
+    w("};")
+    w("const uint16_t game_start_count = %d;" % first)
+    w("")
+    w("int game_clip_find(const char *name) {")
+    w("  for (int i = 0; i < (int)game_clip_count; i++) {")
+    w("    const char *a = game_clips[i].name;")
+    w("    const char *b = name;")
+    w("    while (*a != '\\0' && *a == *b) {")
+    w("      a++;")
+    w("      b++;")
+    w("    }")
+    w("    if (*a == '\\0' && (*b == '\\0' || *b == '.')) {")
+    w("      return i;")
+    w("    }")
+    w("  }")
+    w("  return -1;")
+    w("}")
     w("")
 
     actions = []

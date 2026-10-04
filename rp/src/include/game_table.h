@@ -82,8 +82,10 @@ typedef struct {
 } game_scene_t;
 
 typedef struct {
-  char name[8];     // the clip file's name without ".DLC" ("S05D2")
-  uint16_t frames;  // at 25 a second
+  char name[8];          // the clip file's name without ".DLC" ("S05D2")
+  uint16_t frames;       // at 25 a second
+  uint16_t first_start;  // game_starts' index of its sequences' starts
+  uint16_t start_count;
 } game_clip_t;
 
 #define GAME_ROW_SCENES 3
@@ -97,6 +99,14 @@ extern const game_action_t game_actions[];
 extern const uint16_t game_action_count;
 extern const game_clip_t game_clips[];
 extern const uint16_t game_clip_count;
+// Every clip's sequence starts, ascending, by clip: the frames the
+// converter lists as key pictures so that the game starts any at once.
+extern const uint16_t game_starts[];
+extern const uint16_t game_start_count;
+
+// The clip named `name` (the clip file's or its source's, "S05D2" or
+// "S05D2.MPG"), or -1.
+int game_clip_find(const char *name);
 extern const uint8_t game_rows[][GAME_ROW_SCENES];  // scene indices
 extern const uint16_t game_row_count;
 extern const uint16_t game_attract_scene;  // the attract mode's scene

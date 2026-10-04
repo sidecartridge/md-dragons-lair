@@ -149,6 +149,12 @@ bool clip_writer_picture(clip_writer_t *w, uint32_t frames,
                          const uint16_t palette[16], bool force_key,
                          const int8_t sound[CLIP_SAMPLES]);
 
+// Whether one of `keys` (frames, ascending) falls in [first, first +
+// count): a picture shown from `first` for `count` frames is to be listed
+// as a key (clip_writer_picture()'s `force_key`).
+bool clip_key_in(const uint16_t *keys, uint16_t key_count, uint32_t first,
+                 uint32_t count);
+
 // The picture's rows, in order: `before` the picture before's row (ignored
 // for a key picture).
 void clip_writer_row(clip_writer_t *w, const uint8_t *row,

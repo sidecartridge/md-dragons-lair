@@ -24,6 +24,7 @@
 #include "convjob.h"
 #include "crc32.h"
 #include "ff.h"
+#include "game_table.h"
 #include "iso9660.h"
 #include "manifest.h"
 
@@ -230,8 +231,12 @@ EMSCRIPTEN_KEEPALIVE int dl_convert_start(int index, int gun_bits) {
   m.writer = &s_writer;
   m.sound = s_sound;
   m.pcm = s_pcm;
-  return convjob_start(&s_job, &m, &s_iso, &entry, "clip", gun_bits, NULL,
-                       NULL);
+  // The game's sequence starts in this clip, listed as key pictures.
+  int clip = game_clip_find(entry.name);
+  const game_clip_t *gc = clip >= 0 ? &game_clips[clip] : NULL;
+  return convjob_start(&s_job, &m, &s_iso, &entry, "clip", gun_bits,
+                       gc ? &game_starts[gc->first_start] : NULL,
+                       gc ? gc->start_count : 0u, NULL, NULL);
 }
 
 // The next picture: 1 while the clip goes on, 0 when its file is complete,
