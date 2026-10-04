@@ -14,7 +14,8 @@ checks it.
 
 - Integers are little-endian.
 - A picture is 320 x 200 colour indices, 0 to 15, one row of 320 after another.
-- A palette is 16 words `0x0RGB`, 4 bits a gun. A clip converted for an ST (3 bits a gun) stores
+- A palette is 16 words `0x0RGB`, 4 bits a gun. The converter makes entry 0 of every palette
+  black: on an ST it is also the border's colour. A clip converted for an ST (3 bits a gun) stores
   each gun's level shifted up: `gun = level << 1`, so the ST's own value is `gun >> 1`.
 - Sound is signed 8-bit samples, mono, 22,050 a second: 882 a frame.
 
@@ -121,8 +122,8 @@ the index and reads from that record on.
 
 All 194 clips of the game, as the cartridge converts them (palette stability 10 %, the mixing
 dither, every picture whole): 30,915 frames from 18,436 pictures, 691 of them in the index;
-531.5 MB for an STE and 545.6 MB for an ST, of which 27.3 MB is sound. A picture's record takes
-28.2 KB on average for an STE, 29.0 KB for an ST (its sound included). As deltas
+534.5 MB for an STE and 546.4 MB for an ST, of which 27.3 MB is sound. A picture's record takes
+about 28.4 KB on average for an STE, 29.0 KB for an ST (its sound included). As deltas
 (`dlconv encode --deltas`) the game would take 338.5 MB and 342.4 MB, 17.8 KB a picture's
 record. A clip's sound starts with its pictures; where the source's sound ends before them (a
 few frames in most clips), the frames are silent.

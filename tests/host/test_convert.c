@@ -8,7 +8,7 @@
  * its entries in their slots, or shows the same colours as with its own
  * palette, pixel for pixel; and a still
  * clip (data/still_352x240.mpg) keeps its palette and its indices from its
- * first picture on. Last, the clip converted into a clip file as the
+ * first picture on. Every palette's entry 0, the ST's border, is black. Last, the clip converted into a clip file as the
  * cartridge writes it, for an ST and an STE: the file's CRC-32 is the one
  * dlconv encode gives built by Apple clang and by GCC, so the converter's
  * integers are the same on every host and compiler (it changes with the
@@ -167,6 +167,7 @@ static void sink_begin(void *ctx, const convert_picture_t *picture) {
   CHECK_EQ(k->lines, 0);
   CHECK(picture->frames >= 1);
   CHECK(picture->type == MPEG1_PICTURE_I || picture->type == MPEG1_PICTURE_P);
+  CHECK_EQ(picture->palette->rgb444[0], 0);  // the ST's border: black
 }
 
 static void sink_end(void *ctx, const convert_picture_t *picture) {
@@ -430,8 +431,8 @@ int main(void) {
     }
   }
   check_stability();
-  check_clip_file(3, 0x4C28D36Du);
-  check_clip_file(4, 0xC0684153u);
+  check_clip_file(3, 0xD3AF8385u);
+  check_clip_file(4, 0xE2726DE7u);
   for (int i = 0; i < (int)MPEG1_MAX_SLOTS; i++) {
     free(slots[i]);
   }
