@@ -1743,8 +1743,9 @@ static void conv_stop(void) {
 #define PLAY_STOPPED 1  // a result: SPACE stopped it
 #define PLAY_RING 4096u  // the sound read ahead, a power of two
 // Silence after the clip's sound, so that its last samples fill the
-// audio's last unit and are heard.
-#define PLAY_TAIL 1024u
+// audio's last unit and are heard, and the writer, which writes ahead of
+// the ST (74 ms on the DMA path), finds samples to the end.
+#define PLAY_TAIL 2048u
 
 // The volume, in 3 dB steps from -18 to +18 dB, kept in the app's settings
 // for each output (saved when the clip stops: writing the flash holds the
@@ -1809,8 +1810,9 @@ typedef struct {
   int32_t drift_us[2];  // the earliest and the latest commit, against due
                         // (the first picture waits for the sound to begin)
   int volume_db;
-  uint32_t underruns;   // of the sound while it played (audioUnderruns)
-  uint32_t late_slices; // audioLateSlices
+  uint32_t underruns;   // of the sound until its last sample (audioUnderruns)
+  uint32_t late_slices; // audioLateSlices, the same
+  int32_t lead_ms;      // the sound read ahead of what was heard, at least
 } play_results_t;
 
 __attribute__((used)) play_results_t playResults;
@@ -1873,15 +1875,16 @@ static void play_draw(void) {
         (unsigned long)(r->total_ms / 100u % 10u));
   textf(0, 7, C_TEXT, "SOUND   %lu UNDERRUNS, %lu LATE",
         (unsigned long)r->underruns, (unsigned long)r->late_slices);
+  textf(0, 9, C_TEXT, "LEAD    %ld MS AT LEAST", (long)r->lead_ms);
   textf(0, 8, C_TEXT, "DRIFT   %ld TO %ld MS, VOLUME %+d DB",
         (long)(r->drift_us[0] / 1000), (long)(r->drift_us[1] / 1000),
         r->volume_db);
-  text(0, 10, C_DIM, "MS          MIN    MEAN     MAX");
+  text(0, 11, C_DIM, "MS          MIN    MEAN     MAX");
   static const char *const names[3] = {"READ    ", "DECODE  ", "PUBLISH "};
   const uint32_t *stats[3] = {r->read_us, r->decode_us, r->publish_us};
   for (int i = 0; i < 3; i++) {
     const uint32_t *v = stats[i];
-    textf(0, 11 + i, C_VALUE, "%s %3lu.%02lu %3lu.%02lu %3lu.%02lu", names[i],
+    textf(0, 12 + i, C_VALUE, "%s %3lu.%02lu %3lu.%02lu %3lu.%02lu", names[i],
           (unsigned long)(v[0] / 1000u), (unsigned long)(v[0] / 10u % 100u),
           (unsigned long)(v[1] / 1000u), (unsigned long)(v[1] / 10u % 100u),
           (unsigned long)(v[2] / 1000u), (unsigned long)(v[2] / 10u % 100u));
@@ -1893,8 +1896,18 @@ static const char *play_volume_key(void) {
   return audio_uses_dma() ? ACONFIG_PARAM_VOLUME_DMA : ACONFIG_PARAM_VOLUME_YM;
 }
 
+// The sound's counters, up to now (its last sample, or a stop).
+static void play_sound_counters(void) {
+  playResults.underruns = audioUnderruns - s_play.underruns0;
+  playResults.late_slices = audioLateSlices - s_play.late0;
+}
+
 static void play_finish(int result) {
+  if (result != 0) {
+    play_sound_counters();  // at the end they were taken at its last sample
+  }
   audio_set_fill_callback(NULL);  // the stream's ring is about to go
+  ikbd_set_input_mode(IKBD_INPUT_KEYBOARD);
   playResults.volume_db = 3 * (s_play.gain - PLAY_GAIN_0DB);
   if (s_play.gain_changed) {
     settings_put_integer(aconfig_getContext(), play_volume_key(),
@@ -1904,8 +1917,6 @@ static void play_finish(int result) {
   }
   playResults.result = result;
   playResults.total_ms = (time_us_32() - s_play.t0) / 1000u;
-  playResults.underruns = audioUnderruns - s_play.underruns0;
-  playResults.late_slices = audioLateSlices - s_play.late0;
   if (s_play.m != NULL) {
     playResults.pieces = s_play.m->p.pieces;
     f_close(&s_play.m->f);
@@ -2058,9 +2069,13 @@ static void play_start(int index) {
   s_play.late0 = audioLateSlices;
   playResults.drift_us[0] = INT32_MAX;
   playResults.drift_us[1] = INT32_MIN;
+  playResults.lead_ms = INT32_MAX;
   s_play.t0 = time_us_32();
   audio_set_pcm_stream(play_take, play_avail, CLIP_SAMPLE_RATE);
   audio_render_frame();  // the FIFO full before the writer's next run
+  // The mouse on while it plays, as the game will have it: every packet
+  // takes the ST's time, which must not touch the sound or the pictures.
+  ikbd_set_input_mode(IKBD_INPUT_MOUSE);
 }
 
 // Every pass of the main loop: the clock moves the pictures on; the reader
@@ -2076,6 +2091,11 @@ static void play_frame(void) {
   }
   play_results_t *r = &playResults;
   uint32_t heard = audio_source_played();
+  if (heard > 0 && !s_play.ended) {
+    int32_t lead = (int32_t)((int64_t)(int32_t)(s_play.ring_in - heard) * 1000 /
+                             CLIP_SAMPLE_RATE);
+    r->lead_ms = lead < r->lead_ms ? lead : r->lead_ms;
+  }
   // The converted picture: on the ST when the sound reaches its frame less
   // the screen's delay (the first, once the sound has begun); dropped when
   // the sound is past its frame's end.
@@ -2084,7 +2104,9 @@ static void play_frame(void) {
     if (heard >= due + CLIP_SAMPLES + PLAY_SCREEN_DELAY) {
       s_play.ready = false;
       r->dropped++;
-    } else if (heard + PLAY_SCREEN_DELAY >= due) {
+    } else if (heard + PLAY_SCREEN_DELAY >= due && fb_publish_ready()) {
+      // Only once the ST has copied the picture before: waiting for it here
+      // would stop the sound's top-up (an ST slowed by the mouse).
       uint32_t t0 = time_us_32();
       fb_publish_commit();
       play_stat(r->publish_us, &s_play.sum[2], ++r->pictures,
@@ -2136,6 +2158,7 @@ static void play_frame(void) {
       s_play.ring_in++;
     }
     if (!s_play.ready && !s_play.next && heard >= s_play.sound_end) {
+      play_sound_counters();
       play_finish(0);
     }
   }

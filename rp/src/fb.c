@@ -262,6 +262,8 @@ void fb_publish(void) {
   fb_publish_commit();
 }
 
+bool fb_publish_ready(void) { return s_vbl_seen != s_vbl_published; }
+
 uint32_t fb_last_convert_us(void) { return last_convert_us; }
 
 bool fb_wait_shown(uint32_t timeout_us) {
