@@ -100,6 +100,27 @@ framework's API. [`CLAUDE.md`](CLAUDE.md) describes this repository's code, the 
 internals included. The Multi-device's programming documentation is at
 <https://docs.sidecartridge.com/sidecartridge-multidevice/programming/>.
 
+## Acknowledgements
+
+This project builds on the work of others, with thanks:
+
+- **[DirkSimple](https://github.com/icculus/DirkSimple)** by Ryan C. Gordon (zlib licence): the
+  game's logic, its scenes, sequences, move windows, deaths and points, comes from DirkSimple's
+  `game.lua`, its re-creation of the arcade game from the original ROM's data.
+- **[SNES Super Dragon's Lair Arcade](https://github.com/astrobleem/SNES-SuperDragonsLairArcade)**
+  by Chad Doebelin (MIT licence): its laserdisc segment table (`segment_timing.json`) is how the
+  laserdisc's frames, which DirkSimple's sequences start at, are found in the CD-ROM's clips.
+- **[pl_mpeg](https://github.com/phoboslab/pl_mpeg)** by Dominic Szablewski (MIT licence): the
+  MPEG-1 video and MP2 audio decoding tables (`tools/gen_mpeg1_tables.py`,
+  `tools/gen_mp2_tables.py`).
+- **[QR Code generator](https://www.nayuki.io/page/qr-code-generator-library)** by Project Nayuki
+  (MIT licence): the QR code on the start screen (`rp/src/qrcodegen.c`, unchanged).
+- **[md-framebuffer-template](https://github.com/sidecartridge/md-framebuffer-template)** and
+  md-microfirmware-template by SidecarTridge: the framework this app is built on.
+
+Dragon's Lair itself (Cinematronics, 1983, animated by Don Bluth) is not part of this project:
+the app plays the clips of the player's own copy of the CD-ROM.
+
 ## License
 
 GPL v3.0: see [LICENSE](LICENSE).
