@@ -118,6 +118,47 @@ turn:
 To start in the middle of a clip, a player finds the last key at or before the frame it wants in
 the index and reads from that record on.
 
+## The set's manifest
+
+A set is the game's clips converted for one machine, in a folder of their own (`/DLAIR/STE` for
+an STE, `/DLAIR/ST` for an ST). Whoever converts a whole set, the cartridge or the web page,
+writes its manifest last, `SET.DLM` in the same folder: the clips it holds, so that a player can
+tell a complete set without the CD-ROM image the clips came from. The reference code is
+`rp/src/manifest.c` (`manifest.h`), checked by `tests/host/test_manifest.c`.
+
+The header (32 bytes):
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 4 | magic `DLMF` |
+| 4 | 2 | version: 1 |
+| 6 | 2 | header size: 32 |
+| 8 | 2 | entry size: 32 |
+| 10 | 2 | entries: the set's clips |
+| 12 | 1 | the palette's depth: 3 (an ST) or 4 (an STE) |
+| 13 | 1 | reserved, 0 |
+| 14 | 2 | the converter's version, as in each clip's header |
+| 16 | 2 | the converter's palette stability, as in each clip's header |
+| 18 | 2 | reserved, 0 |
+| 20 | 4 | CRC-32 of the entries, in order |
+| 24 | 8 | reserved, 0 |
+
+Then one entry (32 bytes) per clip, in the image's order:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 16 | the source clip's name in the image (`S01.MPG`), NUL-padded, at most 15 characters |
+| 16 | 4 | the source clip's size in bytes |
+| 20 | 4 | the source clip's CRC-32 |
+| 24 | 4 | the clip file's size in bytes |
+| 28 | 4 | the clip file's CRC-32, its header's |
+
+A clip's file is its source's name with `.DLC` for `.MPG`. A set is complete when its manifest
+reads, its entries give their CRC-32, its converter and depth are the ones the player expects,
+and each entry's file is there with a header that agrees with the entry and the manifest (the
+converter, the stability, the depth, the source's size and CRC-32, the file's CRC-32) and a size
+that agrees with the entry and ends with the file's index.
+
 ## The game, converted
 
 All 194 clips of the game, as the cartridge converts them (palette stability 10 %, the mixing
