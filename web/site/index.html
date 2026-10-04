@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>Dragon's Lair: prepare the SD card</title>
+  <meta name="description" content="Converts the clips of your own Dragon's Lair CD-ROM image into the files the SidecarTridge Multi-device plays on an Atari ST or STE, in your browser: nothing is uploaded.">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header-inner">
+      <div>
+        <span class="kicker">SidecarTridge Multi-device · Atari ST and STE</span>
+        <h1>Dragon's Lair: prepare the SD card</h1>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-content">
+    <p class="lead">
+      This page turns the game's clips, from your own copy of the PC CD-ROM, into the files the
+      cartridge plays: in a minute or two, where the cartridge takes about an hour.
+      <strong>Your image never leaves your computer:</strong> the conversion runs in this page,
+      and nothing is sent anywhere.
+    </p>
+
+    <section class="step" id="step-image">
+      <h2><span class="num">1</span> Your CD-ROM image</h2>
+      <p>The ISO 9660 image of the game's CD-ROM (<code>DL_CDROM_V31.ISO</code>, about 600 MB).</p>
+      <label class="drop" id="drop">
+        <input type="file" id="image" accept=".iso,.ISO">
+        <span id="drop-text">Choose the image, or drop it here</span>
+      </label>
+      <p class="status" id="image-status" role="status"></p>
+    </section>
+
+    <section class="step" id="step-sets">
+      <h2><span class="num">2</span> For which machine</h2>
+      <label class="choice"><input type="checkbox" id="set-ste" checked>
+        <span><strong>STE or Mega STE</strong>: 4,096 colours, about 535 MB on the card</span></label>
+      <label class="choice"><input type="checkbox" id="set-st">
+        <span><strong>ST or Mega ST</strong>: 512 colours, about 546 MB on the card</span></label>
+    </section>
+
+    <section class="step" id="step-where">
+      <h2><span class="num">3</span> Where the files go</h2>
+      <div id="where-folder" hidden>
+        <label class="choice"><input type="radio" name="where" value="folder" checked>
+          <span><strong>Straight onto the card</strong>: choose the card, or its <code>DLAIR</code> folder</span></label>
+        <label class="choice"><input type="radio" name="where" value="zip">
+          <span><strong>A zip file</strong> to unzip onto the card later</span></label>
+      </div>
+      <p id="where-zip" hidden>This browser cannot write to a folder: you get <code>DLAIR.zip</code>,
+        to unzip at the top of the card (it holds the <code>DLAIR</code> folder).</p>
+    </section>
+
+    <div class="actions">
+      <button id="go" class="button" disabled>Convert</button>
+    </div>
+
+    <section class="panel" id="progress" hidden>
+      <h2 id="progress-title">Converting</h2>
+      <div class="bar"><div class="fill" id="overall"></div></div>
+      <p class="figures"><span id="count"></span><span id="left"></span></p>
+      <ul class="clips" id="clips"></ul>
+      <button id="stop" class="button secondary">Stop</button>
+    </section>
+
+    <section class="panel" id="done" hidden>
+      <h2 id="done-title"></h2>
+      <p id="done-text"></p>
+      <p id="done-link"></p>
+      <ol id="done-next">
+        <li>Put the card back in the Multi-device.</li>
+        <li>Start the ST: Dragon's Lair finds the clips and starts at once.</li>
+      </ol>
+    </section>
+
+    <p class="error" id="error" role="alert" hidden></p>
+  </main>
+
+  <footer class="app-footer">
+    <p>Nothing of the game is on this site: the clips come from your own copy.
+      Converter version <span id="version">-</span>.
+      <a href="https://github.com/sidecartridge/md-dragons-lair">md-dragons-lair</a></p>
+  </footer>
+</body>
+</html>

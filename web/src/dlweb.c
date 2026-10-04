@@ -164,6 +164,9 @@ EMSCRIPTEN_KEEPALIVE int dl_mount(void) {
   return iso9660_mount(&s_iso, "image", true);
 }
 
+// The converter's version, as in each clip's header and a set's manifest.
+EMSCRIPTEN_KEEPALIVE int dl_converter_version(void) { return CONVERT_VERSION; }
+
 // The image's scene clips.
 EMSCRIPTEN_KEEPALIVE int dl_clip_count(void) {
   iso9660_dir_t dir;

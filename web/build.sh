@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Builds the converter for a browser and for Node, with Emscripten in Docker:
-# web/dist/dlconv.mjs and web/dist/dlconv.wasm.
+# Builds the converter for a browser and for Node, with Emscripten in Docker
+# (web/dist/dlconv.mjs and web/dist/dlconv.wasm), and the page that runs it
+# (web/dist/site: serve it with any static server).
 #
 #   web/build.sh          the converter
 #   web/build.sh test     also the host test of the converter, run in Node:
@@ -31,6 +32,13 @@ run emcc $CFLAGS -I web/src -I rp/src/include $SOURCES \
   -sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8 -sEXPORTED_FUNCTIONS=_malloc,_free \
   -o web/dist/dlconv.mjs
 echo "Built web/dist/dlconv.mjs and dlconv.wasm"
+
+# The page: web/site's files and the converter, in web/dist/site.
+rm -rf "$ROOT/web/dist/site"
+mkdir -p "$ROOT/web/dist/site"
+cp "$ROOT"/web/site/* "$ROOT/web/dist/dlconv.mjs" "$ROOT/web/dist/dlconv.wasm" \
+  "$ROOT/web/dist/site/"
+echo "Built the page in web/dist/site"
 
 if [ "${1:-}" = "test" ]; then
   # The units test_convert.c names on its first line, as the host Makefile
