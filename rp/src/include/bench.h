@@ -49,6 +49,7 @@
                                    // stopped (a soak run too), then back
 #define DEVHOOKS_APP_SOAK 10       // [WORD N [WORD 3|4]]: every clip from
                                    // N to the last, one after the other
+#define DEVHOOKS_APP_GAME 12       // the game, or back to the bench
 #define DEVHOOKS_APP_NO_IMAGE 11   // [WORD 1|2] the image forgotten, as
                                    // if the card had none: the start
                                    // without it (1: and no set, 2: and an

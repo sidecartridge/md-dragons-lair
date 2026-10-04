@@ -92,6 +92,10 @@ void game_init(game_t *g, const game_options_t *options);
 void game_tick(game_t *g, uint32_t clip_ms, uint32_t held, uint32_t random,
                game_out_t *out);
 
+// Starts a game at once, as the attract mode's start does (`held`: the
+// inputs held, for the arcade's secret). Fills `out`.
+void game_start(game_t *g, uint32_t held, game_out_t *out);
+
 // After a game over, when the options allow it: the game goes on from the
 // scene lost in, with the starting lives and the score at 0.
 void game_continue(game_t *g, game_out_t *out);

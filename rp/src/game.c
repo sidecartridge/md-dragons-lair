@@ -324,6 +324,13 @@ void game_tick(game_t *g, uint32_t clip_ms, uint32_t held, uint32_t random,
   check_timeout(g, held, out);
 }
 
+void game_start(game_t *g, uint32_t held, game_out_t *out) {
+  memset(out, 0, sizeof(*out));
+  g->start_pending = false;
+  start_game(g, held, out);
+  g->pressed_before = held;
+}
+
 void game_continue(game_t *g, game_out_t *out) {
   memset(out, 0, sizeof(*out));
   g->playing = true;
