@@ -21,6 +21,7 @@
 #include "fb_font.h"
 #include "font8x8.h"            /* defines `font8x8` (FB_FONT instance) */
 #include "ikbd.h"
+#include "palette.h"
 #include "pico/time.h"          /* time_us_32 for the publish's timeout */
 #include "profile.h"
 #include "st_session.h"
@@ -241,6 +242,10 @@ void fb_publish(void) {
   uint32_t t1 = time_us_32();
   fb_planar_publish((uint16_t *)fb_screen.framebuffer);
   last_convert_us = transpose_us + (time_us_32() - t1);
+
+  /* The frame's palette with it (palette.h), before the counter: the ST
+   * takes both when it takes the frame. */
+  palette_write_frame();
 
   fb_frame_tick++;
   __sync_synchronize();

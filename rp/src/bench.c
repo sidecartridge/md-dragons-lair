@@ -1722,6 +1722,61 @@ static void conv_stop(void) {
   s_dirty = true;
 }
 
+// --- The palette test -------------------------------------------------------
+//
+// Two full-screen pictures, each with a palette of its own, the other one
+// every PAL_TEST_FRAMES frames, a frame published every frame: A in colour
+// 8 (its palette: 8 red, 9 white), B in colour 9 (9 green, 8 blue). Sent as
+// the frame's palette (palette_set_frame()), only red and green may show.
+// Sent as the palette now before the frame (palette_set(), the way every
+// palette went before frames carried theirs), a picture shows with the
+// other's palette for a VBL or two: blue or white flashes.
+
+#define PAL_TEST_FRAMES 12
+
+static struct {
+  bool active;
+  bool frame_palette;
+  uint32_t frame;
+} s_pal;
+
+static void pal_start(bool frame_palette) {
+  if (s_test.running || s_test.pending || s_show.active || s_ip.active ||
+      s_cv.active || s_sound.active) {
+    return;
+  }
+  s_pal.active = true;
+  s_pal.frame_palette = frame_palette;
+  s_pal.frame = 0;
+}
+
+static void pal_frame(void) {
+  bool b = ((s_pal.frame / PAL_TEST_FRAMES) & 1u) != 0;
+  uint16_t pal[16];
+  memcpy(pal, bench_palette, sizeof(pal));
+  pal[8] = b ? PALETTE_RGB(0, 0, 7) : PALETTE_RGB(7, 0, 0);
+  pal[9] = b ? PALETTE_RGB(0, 7, 0) : PALETTE_RGB(7, 7, 7);
+  fb_chunked_clear(b ? 9 : 8);
+  font_set_font(&font8x8);
+  text(0, 1, C_TEXT,
+       s_pal.frame_palette ? "PALETTE WITH THE FRAME: RED, GREEN"
+                           : "PALETTE BEFORE THE FRAME: FLASHES");
+  text(0, 24, C_TEXT, "SPACE: BACK");
+  if (s_pal.frame_palette) {
+    palette_set_frame(pal);
+  } else {
+    palette_set(pal);
+  }
+  fb_publish();
+  s_pal.frame++;
+}
+
+static void pal_stop(void) {
+  s_pal.active = false;
+  palette_set(bench_palette);
+  s_dirty = true;
+}
+
 // --- Public -----------------------------------------------------------------
 
 void bench_init(void) {
@@ -1792,6 +1847,12 @@ void bench_handle_key(const ikbd_key_event_t *key) {
   if (s_cv.active) {
     if (key->scancode == 0x39) {  // space: stop, or back to the bench
       conv_stop();
+    }
+    return;
+  }
+  if (s_pal.active) {
+    if (key->scancode == 0x39) {  // space: back to the bench
+      pal_stop();
     }
     return;
   }
@@ -1899,6 +1960,12 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     case 0x2E:  // C: the first scene clip converted into a clip file
       conv_start(0, 0);
       break;
+    case 0x14:  // T: the palette test, palettes with their frames
+      pal_start(true);
+      break;
+    case 0x15:  // Y: the palette test, palettes before their frames
+      pal_start(false);
+      break;
     case 0x2D:  // X: back to Booster (the ST resets into it)
       st_session_return_to_booster();
       break;
@@ -1925,6 +1992,10 @@ void bench_frame(void) {
   }
   if (s_cv.active) {
     conv_frame();
+    return;
+  }
+  if (s_pal.active) {
+    pal_frame();
     return;
   }
   if (s_sound.active) {

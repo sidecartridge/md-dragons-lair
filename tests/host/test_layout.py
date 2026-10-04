@@ -150,6 +150,12 @@ PAIRS = [
      lambda rp: rp["CART_IKBD_OUT_BUSY"]),
     ("palette", lambda st: window(st, "PALETTE_ADDR"), lambda rp: rp["CART_PALETTE_OFFSET"]),
     ("palette size", lambda st: st["PALETTE_SIZE"], lambda rp: rp["CART_PALETTE_SIZE"]),
+    ("palette generation", lambda st: window(st, "PALETTE_GEN_ADDR"),
+     lambda rp: rp["CART_PALETTE_GEN_OFFSET"]),
+    ("palette generation busy bit", lambda st: 1 << st["PALETTE_GEN_BUSY_BIT"],
+     lambda rp: rp["CART_PALETTE_GEN_BUSY"]),
+    ("frame's palette", lambda st: window(st, "FRAME_PALETTE_ADDR"),
+     lambda rp: rp["CART_FRAME_PALETTE_OFFSET"]),
     # The audio buffer.
     ("audio buffer", lambda st: window(st, "AUDIO_BUFFER_ADDR"),
      lambda rp: rp["CART_AUDIO_BUFFER_OFFSET"]),
@@ -332,6 +338,27 @@ class Layout(unittest.TestCase):
         self.assertLessEqual(offset + size, start + rp["CART_SHARED_VARIABLES_SLOTS"] * 4)
         palette = rp["CART_PALETTE_OFFSET"]
         self.assertTrue(offset + size <= palette or offset >= palette + rp["CART_PALETTE_SIZE"])
+
+    def test_shared_slots_distinct(self):
+        """Every user of the shared-variable slots has slots of its own."""
+        rp = rp_names()
+        start = rp["CART_SHARED_VARIABLES_OFFSET"]
+        users = [("IKBD commands", "CART_IKBD_OUT_OFFSET", rp["CART_IKBD_OUT_SIZE"]),
+                 ("audio output", "CART_AUDIO_OUT_OFFSET", 2),
+                 ("copy mode", "CART_BLIT_MODE_OFFSET", 2),
+                 ("profile", "CART_PROFILE_OFFSET", 2),
+                 ("palette generation", "CART_PALETTE_GEN_OFFSET", 2),
+                 ("palette", "CART_PALETTE_OFFSET", rp["CART_PALETTE_SIZE"]),
+                 ("frame's palette", "CART_FRAME_PALETTE_OFFSET", rp["CART_PALETTE_SIZE"])]
+        owner = {}
+        for name, key, size in users:
+            first = (rp[key] - start) // 4
+            last = (rp[key] + size - 1 - start) // 4
+            self.assertEqual((rp[key] - start) % 4, 0, name)
+            self.assertLess(last, rp["CART_SHARED_VARIABLES_SLOTS"], name)
+            for slot in range(first, last + 1):
+                self.assertNotIn(slot, owner, f"{name} and {owner.get(slot)}")
+                owner[slot] = name
 
     def test_window_blocks_in_order(self):
         """The blocks do not overlap, and the framebuffer ends the window."""

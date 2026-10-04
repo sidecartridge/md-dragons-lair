@@ -2,12 +2,15 @@
  * File: palette.h
  * Description: 16-entry ST hardware-palette publisher.
  *
- * The RP writes a 16-word palette into the cart shared-region slot
- * at CART_PALETTE_OFFSET; the m68k VBL handler in userfw.s reads
- * the slot every frame and applies it to the shifter's palette
- * registers at $FFFF8240..$FFFF825E. uint16_t writes are
- * transparent across the cart-bus byte-swap, so the value stored
- * here is exactly what the m68k sees.
+ * Two palettes reach the shifter's registers at $FFFF8240..$FFFF825E
+ * (cart_shared.h). The palette now (palette_set(), palette_set_entry()):
+ * the ST puts it in at the next VBL, whatever the screen shows; a screen
+ * animated by its palette alone works this way. And a frame's palette:
+ * fb_publish() sends one with every frame, the one palette_set_frame()
+ * gave for it, else the palette now, and the ST puts it in at the VBL that
+ * first shows that frame, so a picture never shows with another's
+ * palette. uint16_t writes are transparent across the cart-bus byte-swap,
+ * so the value stored here is exactly what the m68k sees.
  *
  * Palette word format (standard ST 9-bit colour):
  *     0000.0RRR.0GGG.0BBB
@@ -53,12 +56,20 @@ extern "C" {
  * once during boot after ERASE_FIRMWARE_IN_RAM. */
 void palette_init(void);
 
-/* Bulk overwrite the cart-slot palette. `entries` must point to
- * exactly PALETTE_ENTRIES uint16_t values. */
+/* The palette now: on screen from the next VBL, and the palette of the
+ * frames published after it. `entries` must point to exactly
+ * PALETTE_ENTRIES uint16_t values. */
 void palette_set(const uint16_t entries[PALETTE_ENTRIES]);
 
-/* Overwrite a single palette entry. */
+/* Overwrite a single entry of the palette now. */
 void palette_set_entry(uint8_t idx, uint16_t color);
+
+/* The palette of the next frame published (fb_publish()) only: on screen
+ * when that frame is. Frames after it take the palette now again. */
+void palette_set_frame(const uint16_t entries[PALETTE_ENTRIES]);
+
+/* For fb_publish(), with the frame: the frame's palette into the cart. */
+void palette_write_frame(void);
 
 #ifdef __cplusplus
 }

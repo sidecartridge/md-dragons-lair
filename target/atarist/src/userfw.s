@@ -54,6 +54,9 @@
 ; $78000.
 VIDEO_BASE_ADDR_HIGH  equ $FFFF8201
 VIDEO_BASE_ADDR_MID   equ $FFFF8203
+; The video address counter's mid byte: reloaded from the base at each VBL
+; and still there in the vertical blank, before the first line is shown.
+VIDEO_COUNT_MID       equ $FFFF8207
 
 ; Palette index 0 doubles as the border colour. We poke it at three
 ; points in the VBL loop so the ST border visualises blit timing
@@ -128,6 +131,16 @@ UFW_VBL_COUNT         equ $00077F90          ; word
 UFW_FRAME_VBL         equ $00077F92          ; word
 ; The stopwatch's wraps (TIME_STUDY).
 UFW_SW_WRAPS          equ $00077F94          ; word
+; The palettes (see PALETTE_ADDR). TOS's, saved at boot and put back on the
+; way to GEM. The frame's, copied with the frame before the ack, and the
+; page that shows it: $8000 + that page's video base mid byte while
+; userfw_vbl has still to put it in the shifter, 0 once it has. The
+; generation of the palette now last put in the shifter ($FFFF at boot:
+; every generation the RP completes has bit 15 clear).
+UFW_TOS_PALETTE       equ $00077F96          ; 32 bytes
+UFW_FRAME_PALETTE     equ $00077FB6          ; 32 bytes
+UFW_PALETTE_PENDING   equ $00077FD6          ; word
+UFW_PALETTE_GEN       equ $00077FD8          ; word
 UFW_VBL_VEC_SAVE      equ $00077FE0          ; longword: TOS VBL vector ($70)
 UFW_PHYSBASE_SAVE     equ $00077FE8          ; longword: XBIOS Physbase result
 UFW_SCREEN_PAGE       equ $00077FEC          ; longword: current draw page address
@@ -572,6 +585,18 @@ userfw:
     lea     ST_FEATURES_WINDOW, a0
     tst.b   (a0, d1.w)
 
+    ; TOS's palette, for the way back to GEM; no frame's palette pending
+    ; and none of the RP's palettes in the shifter yet (see
+    ; UFW_PALETTE_PENDING), before userfw_vbl can look at them.
+    lea     PALETTE_BASE.w, a1
+    lea     UFW_TOS_PALETTE, a2
+    moveq   #(PALETTE_SIZE / 4) - 1, d0
+.save_tos_palette:
+    move.l  (a1)+, (a2)+
+    dbf     d0, .save_tos_palette
+    clr.w   UFW_PALETTE_PENDING
+    move.w  #-1, UFW_PALETTE_GEN
+
     ; Save TOS's VBL vector and install ours. We're in supervisor mode
     ; (entered via CA_INIT) so writing $70.w is legal.
     move.l  VBL_VECTOR.w, UFW_VBL_VEC_SAVE   ; TOS VBL vector saved in RAM
@@ -915,16 +940,24 @@ userfw:
     dbf     d2, .dma_copy
 .dma_done:
 
-    ; Publish RP-supplied palette to the shifter. 16 words
-    ; from PALETTE_ADDR -> $FFFF8240..$FFFF825E via two MOVEMs.
-    ; Cost: 76 (load) + 72 (store) + 16 (lea) = ~164 cyc / VBL =
-    ; ~20 us. Apps that don't want RP-driven palette can leave the
-    ; cart slot zero (= all-black screen, since the m68k still
-    ; publishes it every frame) -- swap the load EA below for
-    ; their own palette source if needed.
-    lea     PALETTE_ADDR, a5
-    movem.l (a5), d0-d7
-    movem.l d0-d7, PALETTE_BASE.w
+    ; The palette now (PALETTE_ADDR), into the shifter at the VBL after its
+    ; generation (PALETTE_GEN_ADDR) changed: not while the RP writes it
+    ; (busy bit), and only when the generation read after the palette is
+    ; the one read before (else the next VBL tries again). About 25 us when
+    ; it changed, 4 us when not. A frame's own palette goes in with the
+    ; frame (UFW_FRAME_PALETTE, see userfw_vbl).
+    move.w  PALETTE_GEN_ADDR, d0
+    cmp.w   UFW_PALETTE_GEN, d0
+    beq.s   .palette_done
+    btst    #PALETTE_GEN_BUSY_BIT, d0
+    bne.s   .palette_done
+    lea     PALETTE_ADDR, a1
+    movem.l (a1), d1-d7/a2
+    cmp.w   PALETTE_GEN_ADDR, d0
+    bne.s   .palette_done
+    movem.l d1-d7/a2, PALETTE_BASE.w
+    move.w  d0, UFW_PALETTE_GEN
+.palette_done:
 
     ; Blit only a frame the RP has finished publishing, and only once
     ; (see FB_FRAME_COUNTER_ADDR), and no sooner than the profile's VBLs a
@@ -1051,7 +1084,21 @@ userfw:
     ; +2 of the longword is exactly the MID byte (bits 8..15) we need
     ; to write to VIDEO_BASE_ADDR_MID. Read it straight from memory
     ; instead of recomputing via lsr/move chain from A5.
+    ;
+    ; The frame's palette goes with it: copied here, before the ack (after
+    ; it the RP may write the next frame's), and put in the shifter by
+    ; userfw_vbl at the VBL that shows this page. The VBL is masked from
+    ; the flip to the flag (Timer-B and the ACIA still run).
+    lea     FRAME_PALETTE_ADDR, a1
+    movem.l (a1), d0-d7
+    movem.l d0-d7, UFW_FRAME_PALETTE
+    moveq   #0, d0
+    move.b  UFW_SCREEN_PAGE+2, d0
+    or.w    #$8000, d0
+    move.w  #$2400, sr
     move.b  UFW_SCREEN_PAGE+2, VIDEO_BASE_ADDR_MID.w
+    move.w  d0, UFW_PALETTE_PENDING
+    move.w  #$2300, sr
 
     ; Toggle UFW_SCREEN_PAGE between SCREEN_A and SCREEN_B for the
     ; next frame.
@@ -1158,6 +1205,10 @@ userfw:
     ; Restore TOS's VBL vector ($70 save from UFW_VBL_VEC_SAVE).
     move.l  UFW_VBL_VEC_SAVE, VBL_VECTOR.w
 
+    ; And TOS's palette (saved at boot).
+    movem.l UFW_TOS_PALETTE, d0-d7
+    movem.l d0-d7, PALETTE_BASE.w
+
     ; Give TOS its mouse and joysticks back (see IKBD_CMD_RESET_HDR).
     IKBD_SEND IKBD_CMD_JOY_EVENTS
     IKBD_SEND IKBD_CMD_MOUSE_REL
@@ -1252,6 +1303,25 @@ userfw_vbl:
     lsl.w   #AUDIO_SLICE_SHIFT-8, d0      ; shifts 8 bits at most
     movea.l #AUDIO_BUFFER_ADDR, a0
     adda.w  d0, a0
+    ; The frame's palette (UFW_FRAME_PALETTE), at the VBL that shows its
+    ; page: the video counter, reloaded from the base at this VBL, points
+    ; at it. A flip that came too late for this VBL shows at the next one,
+    ; and so does its palette. Timer-B and the ACIA run meanwhile (A0 is on
+    ; its slice); about 30 us, once a frame.
+    move.w  UFW_PALETTE_PENDING, d0
+    beq.s   .vbl_palette_done
+    cmp.b   VIDEO_COUNT_MID.w, d0
+    bne.s   .vbl_palette_done
+    move.w  #$2500, sr
+    movem.l a1-a2, -(sp)
+    lea     UFW_FRAME_PALETTE, a1
+    lea     PALETTE_BASE.w, a2
+    rept    PALETTE_SIZE / 4
+    move.l  (a1)+, (a2)+
+    endr
+    movem.l (sp)+, a1-a2
+    clr.w   UFW_PALETTE_PENDING
+.vbl_palette_done:
     move.l  (sp)+, d0
     clr.w   UFW_VBL_FLAG
     rte
