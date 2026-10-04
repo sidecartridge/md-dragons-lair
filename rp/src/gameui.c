@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "aconfig.h"
+#include "clip.h"
 #include "debug.h"
 #include "fb.h"
 #include "fb_blit.h"
@@ -52,8 +53,14 @@ static const uint16_t gameui_palette[16] = {
 #define CONTINUE_SECONDS 10
 #define SCORES_US 10000000u
 #define BANNER_US 3000000u          // the score and lives at a scene's start
+// Fire ignored this long on the screens after a game: the sword still
+// pressed does not pass them by.
+#define SETTLE_US 1000000u
+#define SOUND_GAP_US 200000u        // between two input sounds (DirkSimple's)
 #define HISCORES 10
 #define HISCORE_LEN 10              // "DRK0300000"
+#define PICK_ROWS 20                // the picker's lines on the screen
+#define FRAME_MS (CLIP_SAMPLES * 1000u / CLIP_SAMPLE_RATE)
 
 static struct {
   gameui_host_t host;
@@ -64,8 +71,14 @@ static struct {
   uint8_t lives;
   uint16_t start_scene;  // GAME_SCENE_NONE: from the start
   int pick;              // the picker's line: 0 the start, 1.. a scene
-  // Input.
-  uint32_t keys_held;    // GAME_BIT()s from the keyboard
+  // Input: GAME_BIT()s from the keyboard, held and pressed since the last
+  // tick (a press and its release between two ticks still counts); the
+  // stick in port 1, read once a pass, the same.
+  uint32_t keys_held;
+  uint32_t keys_pressed;
+  uint8_t stick;
+  uint8_t stick_pressed;
+  uint32_t sound_t0;     // the last input sound
   // The engine and its clip.
   game_t game;
   bool clip_on;          // a clip playing (or holding its end)
@@ -328,9 +341,11 @@ static void start_clip(uint8_t clip, uint32_t frame, bool paused) {
   int r = player_start(path, frame, paused);
   if (r < 0) {
     DPRINTF("Game: %s from %lu failed (%d)\n", path, (unsigned long)frame, r);
-    s_ui.ended = true;  // the clock goes on: the engine moves past it
-    s_ui.end_ms = s_ui.base_ms;
-    s_ui.clock_t0 = time_us_32();
+    if (!s_ui.held) {  // (a picture held already runs on the RP's clock)
+      s_ui.ended = true;  // the clock goes on: the engine moves past it
+      s_ui.end_ms = s_ui.base_ms;
+      s_ui.clock_t0 = time_us_32();
+    }
   }
 }
 
@@ -347,15 +362,14 @@ static uint32_t clip_ms(void) {
   return s_ui.base_ms + player_heard_ms();
 }
 
+// One of our screens (their palette goes with their frames: set now, it
+// would colour the clip's last picture before our screen replaces it).
 static void enter_mode(int mode) {
   s_ui.mode = mode;
   s_ui.mode_t0 = time_us_32();
   s_ui.dirty = true;
-  if (mode != MODE_ATTRACT && mode != MODE_PLAY) {
-    if (player_active()) {
-      player_close(PLAYER_STOPPED);
-    }
-    palette_set(gameui_palette);
+  if (player_active()) {
+    player_close(PLAYER_STOPPED);
   }
 }
 
@@ -373,6 +387,12 @@ static void game_over(bool won) {
 }
 
 static void apply(const game_out_t *out) {
+  if (out->game_over && s_ui.mode == MODE_PLAY) {
+    // The engine is back in its attract mode: our screens first (its
+    // movie after them starts it again).
+    game_over(out->won);
+    return;
+  }
   if (out->seek) {
     s_ui.held = false;
     s_ui.base_ms = 0;
@@ -395,9 +415,6 @@ static void apply(const game_out_t *out) {
     s_ui.mode = MODE_PLAY;
     s_ui.scene_seen = GAME_SCENE_NONE;
   }
-  if (out->game_over && s_ui.mode == MODE_PLAY) {
-    game_over(out->won);
-  }
   if (s_ui.game.playing && s_ui.game.scene != s_ui.scene_seen) {
     s_ui.scene_seen = s_ui.game.scene;
     s_ui.scene_t0 = time_us_32();
@@ -408,14 +425,13 @@ static void apply(const game_out_t *out) {
 }
 
 static uint32_t held_inputs(void) {
-  ikbd_joystick_t joy;
-  ikbd_read_joystick(1, &joy);
-  uint32_t held = s_ui.keys_held;
-  if (joy.state & IKBD_JOY_UP) held |= GAME_BIT(GAME_IN_UP);
-  if (joy.state & IKBD_JOY_DOWN) held |= GAME_BIT(GAME_IN_DOWN);
-  if (joy.state & IKBD_JOY_LEFT) held |= GAME_BIT(GAME_IN_LEFT);
-  if (joy.state & IKBD_JOY_RIGHT) held |= GAME_BIT(GAME_IN_RIGHT);
-  if (joy.state & IKBD_JOY_FIRE) held |= GAME_BIT(GAME_IN_ACTION);
+  uint8_t joy = s_ui.stick | s_ui.stick_pressed;
+  uint32_t held = s_ui.keys_held | s_ui.keys_pressed;
+  if (joy & IKBD_JOY_UP) held |= GAME_BIT(GAME_IN_UP);
+  if (joy & IKBD_JOY_DOWN) held |= GAME_BIT(GAME_IN_DOWN);
+  if (joy & IKBD_JOY_LEFT) held |= GAME_BIT(GAME_IN_LEFT);
+  if (joy & IKBD_JOY_RIGHT) held |= GAME_BIT(GAME_IN_RIGHT);
+  if (joy & IKBD_JOY_FIRE) held |= GAME_BIT(GAME_IN_ACTION);
   return held;
 }
 
@@ -443,6 +459,14 @@ static void attract(void) {
   apply(&out);
 }
 
+// The inputs held now, without the presses latched (the arcade's secret is
+// two directions held at the start).
+static uint32_t held_now(void) {
+  s_ui.keys_pressed = 0;
+  s_ui.stick_pressed = 0;
+  return held_inputs();
+}
+
 static void start_game(void) {
   game_options_t o = options_for_game();
   game_init(&s_ui.game, &o);
@@ -450,7 +474,7 @@ static void start_game(void) {
   s_ui.ended = false;
   s_ui.base_ms = 0;
   game_out_t out;
-  game_start(&s_ui.game, held_inputs(), &out);
+  game_start(&s_ui.game, held_now(), &out);
   s_ui.mode = MODE_PLAY;
   apply(&out);
 }
@@ -460,7 +484,10 @@ static void run_engine(void) {
   if (s_ui.clip_on && !s_ui.ended) {
     int r = player_frame();
     if (r <= 0) {
-      uint32_t heard = player_heard_ms();
+      // At its end, the clip's length (the sound heard may already be into
+      // the silence after it); after an error, the sound heard.
+      uint32_t heard = r == 0 ? (player_frames() - player_first_frame()) * FRAME_MS
+                              : player_heard_ms();
       if (r == 0 && s_ui.then_clip != GAME_CLIP_NONE) {
         // On into the next clip, as the laserdisc plays on.
         s_ui.base_ms += heard;
@@ -473,11 +500,22 @@ static void run_engine(void) {
         s_ui.clock_t0 = time_us_32();
       }
     }
-  } else if (s_ui.held && player_active()) {
-    player_frame();  // the held picture on the screen
   }
   game_out_t out;
   game_tick(&s_ui.game, clip_ms(), held_inputs(), time_us_32(), &out);
+  s_ui.keys_pressed = 0;
+  s_ui.stick_pressed = 0;
+  // The input sounds, before a clip the tick starts: a move's tone is then
+  // heard as that clip's sound begins.
+  if (out.sounds != 0 && (s_ui.options & GAMEUI_OPT_SOUNDS) &&
+      s_ui.mode == MODE_PLAY && time_us_32() - s_ui.sound_t0 >= SOUND_GAP_US) {
+    s_ui.sound_t0 = time_us_32();
+    if (out.sounds & GAME_SOUND_ACCEPT) {
+      player_beep(1000, 60);  // a blip
+    } else {
+      player_beep(110, 150);  // a buzz
+    }
+  }
   apply(&out);
 }
 
@@ -500,47 +538,15 @@ static void draw_menu(void) {
   textf(3, r++, C_TEXT, "W  WATCH MODE               %5s", on_off(GAMEUI_OPT_WATCH));
   textf(3, r++, C_TEXT, "C  CONTINUE                 %5s", on_off(GAMEUI_OPT_CONTINUE));
   textf(3, r++, C_TEXT, "S  INPUT SOUNDS             %5s", on_off(GAMEUI_OPT_SOUNDS));
-  char from[24];
-  snprintf(from, sizeof(from), "%.22s",
-           s_ui.start_scene == GAME_SCENE_NONE
-               ? "THE START"
-               : game_scenes[s_ui.start_scene].title);
-  textf(3, r++, C_TEXT, "P  START AT");
-  textf(36 - (int)strlen(from), r - 1, C_VALUE, "%s", from);
+  text(3, r++, C_TEXT, "P  START AT");
+  text(6, r++, C_VALUE, s_ui.start_scene == GAME_SCENE_NONE
+                            ? "THE START"
+                            : game_scenes[s_ui.start_scene].title);
   r++;
   text(3, r++, C_DIM, "T  HIGH SCORES     B  THE BENCH");
   textf(3, 22, C_DIM, "BEST  %.3s  %lu", s_ui.scores[0],
         (unsigned long)hiscore_of(0));
   centred(24, C_DIM, "IN GAME: P PAUSE, U/D VOLUME");
-}
-
-static void draw_pick(void) {
-  title();
-  centred(4, C_TEXT, "START AT");
-  // The start, then every playable scene, two columns of 20.
-  int n = 0;
-  for (uint16_t i = 0; i <= game_scene_count; i++) {
-    const char *name;
-    if (i == 0) {
-      name = "THE START";
-    } else if (i - 1 == game_attract_scene || i - 1 == game_intro_scene) {
-      continue;
-    } else {
-      name = game_scenes[i - 1].title;
-    }
-    int col = n < 20 ? 0 : 20;
-    int row = 6 + n % 20;
-    if (row > 23) {
-      break;
-    }
-    bool sel = n == s_ui.pick;
-    char shown[20];
-    snprintf(shown, sizeof(shown), "%.18s", name);
-    text(col, row, sel ? C_TITLE : C_VALUE, sel ? ">" : " ");
-    text(col + 1, row, sel ? C_TITLE : C_VALUE, shown);
-    n++;
-  }
-  centred(24, C_DIM, "RETURN: CHOOSE   SPACE: BACK");
 }
 
 // The picker's lines: the start, then the playable scenes in the table's
@@ -561,6 +567,31 @@ static uint16_t pick_scene(int line, int *count) {
     *count = n + 1;
   }
   return found;
+}
+
+// One column of whole titles (the reversed scenes differ only at their
+// end), PICK_ROWS of them around the line chosen.
+static void draw_pick(void) {
+  title();
+  centred(3, C_TEXT, "START AT");
+  int count;
+  pick_scene(0, &count);
+  int top = s_ui.pick - PICK_ROWS / 2;
+  if (top > count - PICK_ROWS) {
+    top = count - PICK_ROWS;
+  }
+  if (top < 0) {
+    top = 0;
+  }
+  for (int line = top; line < count && line < top + PICK_ROWS; line++) {
+    uint16_t sc = pick_scene(line, NULL);
+    bool sel = line == s_ui.pick;
+    int row = 4 + line - top;
+    text(4, row, sel ? C_TITLE : C_VALUE, sel ? ">" : " ");
+    text(6, row, sel ? C_TITLE : C_VALUE,
+         sc == GAME_SCENE_NONE ? "THE START" : game_scenes[sc].title);
+  }
+  centred(24, C_DIM, "RETURN: CHOOSE   SPACE: BACK");
 }
 
 static void draw_pause(void) {
@@ -670,7 +701,36 @@ void gameui_stop(void) {
 
 bool gameui_active(void) { return s_ui.mode != MODE_OFF; }
 
+static void press(uint8_t sc);
+
+// The stick, once a pass: in a game, the engine's input; on our screens,
+// the keys it stands for (fire: return; the directions: the cursor keys).
+static void read_stick(void) {
+  ikbd_joystick_t joy;
+  ikbd_read_joystick(1, &joy);
+  s_ui.stick = joy.state;
+  s_ui.stick_pressed = joy.pressed;
+  if (s_ui.mode == MODE_PLAY || s_ui.mode == MODE_ATTRACT) {
+    if (s_ui.mode == MODE_ATTRACT && (joy.pressed & IKBD_JOY_FIRE)) {
+      press(0x1C);
+    }
+    return;
+  }
+  static const uint8_t keys[5][2] = {{IKBD_JOY_FIRE, 0x1C},
+                                     {IKBD_JOY_UP, 0x48},
+                                     {IKBD_JOY_DOWN, 0x50},
+                                     {IKBD_JOY_LEFT, 0x4B},
+                                     {IKBD_JOY_RIGHT, 0x4D}};
+  for (int i = 0; i < 5; i++) {
+    if (joy.pressed & keys[i][0]) {
+      press(keys[i][1]);
+    }
+  }
+  s_ui.stick_pressed = 0;
+}
+
 void gameui_frame(void) {
+  read_stick();
   switch (s_ui.mode) {
     case MODE_ATTRACT:
     case MODE_PLAY:
@@ -698,6 +758,7 @@ void gameui_frame(void) {
     default:
       break;
   }
+  s_ui.keys_pressed = 0;  // our screens take the keys as they come
   if (s_ui.dirty) {
     s_ui.dirty = false;
     switch (s_ui.mode) {
@@ -710,6 +771,7 @@ void gameui_frame(void) {
       default: break;
     }
   }
+  palette_set_frame(gameui_palette);
   fb_publish();  // every pass: an ST that boots takes the frame it finds
 }
 
@@ -726,6 +788,7 @@ static void track_keys(const ikbd_key_event_t *key) {
   }
   if (key->is_press) {
     s_ui.keys_held |= bit;
+    s_ui.keys_pressed |= bit;
   } else {
     s_ui.keys_held &= ~bit;
   }
@@ -739,11 +802,19 @@ static void toggle(uint32_t bit) {
 
 void gameui_key(const ikbd_key_event_t *key) {
   track_keys(key);
-  if (!key->is_press) {
+  if (key->is_press) {
+    press(key->scancode);
+  }
+}
+
+// A key pressed (or the stick's, as a key) on our screens.
+static void press(uint8_t sc) {
+  bool fire = sc == 0x39 || sc == 0x1C || sc == 0x72;  // space, return
+  if ((s_ui.mode == MODE_CONTINUE || s_ui.mode == MODE_ENTRY ||
+       s_ui.mode == MODE_SCORES) &&
+      time_us_32() - s_ui.mode_t0 < SETTLE_US) {
     return;
   }
-  uint8_t sc = key->scancode;
-  bool fire = sc == 0x39 || sc == 0x1C || sc == 0x72;  // space, return
   switch (s_ui.mode) {
     case MODE_ATTRACT:
       if (fire) {
@@ -789,8 +860,10 @@ void gameui_key(const ikbd_key_event_t *key) {
       pick_scene(0, &count);
       if (sc == 0x48) s_ui.pick = s_ui.pick > 0 ? s_ui.pick - 1 : count - 1;
       if (sc == 0x50) s_ui.pick = s_ui.pick + 1 < count ? s_ui.pick + 1 : 0;
-      if (sc == 0x4B) s_ui.pick = s_ui.pick >= 20 ? s_ui.pick - 20 : 0;
-      if (sc == 0x4D) s_ui.pick = s_ui.pick + 20 < count ? s_ui.pick + 20 : count - 1;
+      if (sc == 0x4B) s_ui.pick = s_ui.pick >= PICK_ROWS ? s_ui.pick - PICK_ROWS : 0;
+      if (sc == 0x4D) {
+        s_ui.pick = s_ui.pick + PICK_ROWS < count ? s_ui.pick + PICK_ROWS : count - 1;
+      }
       if (sc == 0x1C || sc == 0x72) {
         s_ui.start_scene = pick_scene(s_ui.pick, NULL);
         settings_store();
@@ -815,22 +888,22 @@ void gameui_key(const ikbd_key_event_t *key) {
     case MODE_PAUSE:
       if (sc == 0x19) {  // P: on again, from the frame shown
         s_ui.mode = MODE_PLAY;
-        if (s_ui.held) {
+        if (s_ui.held || s_ui.ended) {
+          // A picture held, or the clip's last after its end: that picture
+          // back on the screen, held, the clock the RP's from the pause.
+          s_ui.held = true;
           s_ui.clock_t0 = time_us_32() - s_ui.paused_ms * 1000u;
           start_clip(s_ui.clip, s_ui.paused_frame, true);
-        } else if (!s_ui.ended) {
+        } else {
           s_ui.base_ms = s_ui.paused_ms;
           start_clip(s_ui.clip, s_ui.paused_frame, false);
-        } else {
-          s_ui.clock_t0 = time_us_32();
-          s_ui.end_ms = s_ui.paused_ms;
         }
       }
       break;
     case MODE_CONTINUE:
       if (fire) {
         game_out_t out;
-        game_continue(&s_ui.game, &out);
+        game_continue(&s_ui.game, held_now(), &out);
         s_ui.mode = MODE_PLAY;
         s_ui.held = false;
         s_ui.ended = false;

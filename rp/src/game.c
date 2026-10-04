@@ -331,8 +331,9 @@ void game_start(game_t *g, uint32_t held, game_out_t *out) {
   g->pressed_before = held;
 }
 
-void game_continue(game_t *g, game_out_t *out) {
+void game_continue(game_t *g, uint32_t held, game_out_t *out) {
   memset(out, 0, sizeof(*out));
+  g->pressed_before = held;
   g->playing = true;
   g->lives = g->options.starting_lives >= 1 && g->options.starting_lives <= 5
                  ? g->options.starting_lives
@@ -346,16 +347,27 @@ bool game_hint(const game_t *g, uint8_t *input, bool *open) {
   if (!g->playing || g->accepted != GAME_SEQ_NONE) {
     return false;
   }
+  // A window open now, else the one that opens first (the moves are listed
+  // by input, not by time: the rapids pass either way).
   const game_sequence_t *s = seq_of(g);
+  const game_action_t *best = NULL;
+  uint32_t best_from = 0;
   for (uint16_t i = 0; i < s->action_count; i++) {
     const game_action_t *act = &game_actions[s->first_action + i];
     if (act->to_ms < g->sequence_ms || act->next == GAME_SEQ_NONE ||
         kills(act->next)) {
       continue;
     }
-    *input = act->input;
-    *open = act->from_ms <= g->sequence_ms;
-    return true;
+    uint32_t from = act->from_ms > g->sequence_ms ? act->from_ms : g->sequence_ms;
+    if (best == NULL || from < best_from) {
+      best = act;
+      best_from = from;
+    }
   }
-  return false;
+  if (best == NULL) {
+    return false;
+  }
+  *input = best->input;
+  *open = best->from_ms <= g->sequence_ms;
+  return true;
 }

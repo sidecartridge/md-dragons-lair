@@ -54,6 +54,8 @@ static const int play_gains[] = {32,  45,  64,  91,   128,  181, 256,
 #define PLAY_LATE_US 40000
 // A record's reading this slow is counted.
 #define PLAY_SLOW_READ_US 10000u
+// A tone's level at 0 dB (player_beep()), of the samples' 127.
+#define PLAY_BEEP_LEVEL 32
 
 typedef struct {
   FIL f;
@@ -104,6 +106,15 @@ static struct {
   bool ack_waited;      // and the ST had not copied the one before
 } s_play;
 
+// A tone over the sound (player_beep()): its samples left, its half period
+// in samples, where it is in its period, its level. Kept across a start.
+static struct {
+  uint32_t left;
+  uint32_t half;
+  uint32_t phase;
+  int level;
+} s_beep;
+
 __attribute__((used)) play_results_t playResults;
 extern uint32_t audioUnderruns, audioLateSlices;
 
@@ -134,6 +145,14 @@ static void play_take(int8_t *buf, uint32_t n) {
                  : 0;
   }
   s_play.ring_out = out + n;
+  // The tone, a square wave added to the samples taken.
+  for (uint32_t i = 0; i < n && s_beep.left > 0; i++, s_beep.left--) {
+    int v = buf[i] + (s_beep.phase < s_beep.half ? s_beep.level : -s_beep.level);
+    buf[i] = (int8_t)(v > 127 ? 127 : v < -128 ? -128 : v);
+    if (++s_beep.phase >= 2u * s_beep.half) {
+      s_beep.phase = 0;
+    }
+  }
 }
 
 static void play_stat(uint32_t stat[3], uint64_t *sum, uint32_t count,
@@ -162,7 +181,9 @@ static void play_sound_counters(void) {
   playResults.late_slices = late - s_play.late0;
 }
 
-void player_close(int result) {
+// The clip closed; a tone still to come stays for the next (a move's tone
+// as its clip starts).
+static void close_clip(int result) {
   if (!s_play.active) {
     return;
   }
@@ -207,6 +228,11 @@ void player_close(int result) {
           (unsigned long)playResults.publish_us[0],
           (unsigned long)playResults.publish_us[1],
           (unsigned long)playResults.publish_us[2]);
+}
+
+void player_close(int result) {
+  close_clip(result);
+  s_beep.left = 0;
 }
 
 // Reads records while the ring has room for one more's sound and the
@@ -281,9 +307,7 @@ static int play_read_ahead(void) {
 }
 
 int player_start(const char *path, uint32_t frame, bool paused) {
-  if (s_play.active) {
-    player_close(PLAYER_STOPPED);
-  }
+  close_clip(PLAYER_STOPPED);
   player_overlay_fn overlay = s_play.overlay;
   memset(&s_play, 0, sizeof(s_play));
   memset(&playResults, 0, sizeof(playResults));
@@ -419,6 +443,14 @@ void player_volume(int step) {
 }
 
 void player_set_overlay(player_overlay_fn fn) { s_play.overlay = fn; }
+
+void player_beep(uint32_t hz, uint32_t ms) {
+  int level = PLAY_BEEP_LEVEL * play_gains[s_play.gain] / 256;
+  s_beep.level = level > 96 ? 96 : level;
+  s_beep.half = CLIP_SAMPLE_RATE / (2u * hz);
+  s_beep.phase = 0;
+  s_beep.left = CLIP_SAMPLE_RATE * ms / 1000u;
+}
 
 int player_frame(void) {
   if (!s_play.active) {

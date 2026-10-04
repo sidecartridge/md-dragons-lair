@@ -2357,8 +2357,11 @@ static void conv_frame(void) {
   }
 }
 
+static void game_open(void);
+
 // SPACE: a clip converting is stopped (its file closed, left incomplete); a
-// run shows where it got to; from the end's screen, back to the bench.
+// run shows where it got to; from the end's screen, the game when the run
+// made it ready, else back to the bench.
 static void conv_stop(void) {
   if (!s_cv.done && s_cv.job != NULL) {
     convjob_abort(s_cv.job);
@@ -2371,9 +2374,13 @@ static void conv_stop(void) {
     s_dirty = true;
     return;
   }
+  bool ready = s_cv.all && !s_cv.stopped && s_cv.failed == 0;
   s_cv.active = false;
   palette_set(bench_palette);
   s_dirty = true;
+  if (ready) {
+    game_open();  // "THE GAME IS READY": on to it
+  }
 }
 
 // --- Playing a clip file ----------------------------------------------------
@@ -3058,7 +3065,8 @@ static void pal_stop(void) {
 // interrupt (the sound test it stops itself).
 static bool bench_busy(void) {
   return s_test.running || s_test.pending || s_show.active || s_ip.active ||
-         s_cv.active || s_play.active || s_clips.active || s_pal.active;
+         s_cv.active || s_play.active || s_clips.active || s_pal.active ||
+         gameui_active();
 }
 
 // --- Public -----------------------------------------------------------------
@@ -3121,7 +3129,13 @@ static const gameui_host_t game_host = {game_clip_path, game_card_fast,
                                         game_to_bench};
 
 static void game_open(void) {
-  if (!clips_available() || bench_busy()) {
+  // Every clip of the set: with the image, its manifest (written once all
+  // are converted); without it, the set found complete.
+  manifest_header_t mh;
+  bool complete = benchResults.image_found
+                      ? manifest_current(conv_machine_bits(), &mh)
+                      : s_set.ready;
+  if (!clips_available() || !complete || bench_busy()) {
     return;
   }
   if (s_sound.active) {

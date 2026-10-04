@@ -6,8 +6,9 @@
  * nothing losing five lives and reaching game over through the scene's
  * game over clip; a player following the hint (oldies mode's move) winning
  * too; infinite lives (the option and the arcade's secret) never ending;
- * a game started at a chosen scene; a continue after game over; and a
- * diagonal pressed taking a diagonal's move before its directions'. */
+ * a game started at a chosen scene; a continue after game over; the hint
+ * showing an open window when one is; and a diagonal pressed taking a
+ * diagonal's move before its directions'. */
 
 #include <string.h>
 
@@ -169,10 +170,12 @@ static void check_idle(void) {
   CHECK(!s.g.playing);
   // A continue: the game goes on with its lives back.
   game_out_t out;
-  game_continue(&s.g, &out);
+  game_continue(&s.g, GAME_BIT(GAME_IN_ACTION), &out);
   CHECK(s.g.playing);
   CHECK_EQ(s.g.lives, 5);
   CHECK(out.seek || out.single_frame);
+  // The fire that continued it, still held, is no move.
+  CHECK_EQ(s.g.pressed_before, GAME_BIT(GAME_IN_ACTION));
 }
 
 static void check_hints(void) {
@@ -227,6 +230,35 @@ static void check_start_scene(void) {
   }
 }
 
+// The hint shows an open window whenever a move that passes is open (the
+// rapids list a later move before an earlier one).
+static void check_hint_open(void) {
+  int checked = 0;
+  for (uint16_t q = 0; q < game_sequence_count; q++) {
+    const game_sequence_t *seq = &game_sequences[q];
+    for (uint16_t i = 0; i < seq->action_count; i++) {
+      const game_action_t *a = &game_actions[seq->first_action + i];
+      if (a->next == GAME_SEQ_NONE ||
+          (game_sequences[a->next].flags & GAME_SEQ_KILLS)) {
+        continue;
+      }
+      game_t g;
+      game_options_t o = options();
+      game_init(&g, &o);
+      g.playing = true;
+      g.sequence = q;
+      g.accepted = GAME_SEQ_NONE;
+      g.sequence_ms = a->from_ms;
+      uint8_t input;
+      bool open = false;
+      CHECK(game_hint(&g, &input, &open));
+      CHECK(open);
+      checked++;
+    }
+  }
+  CHECK(checked > 0);
+}
+
 // A diagonal pressed: a window open for both a diagonal and one of its
 // directions takes the diagonal's move.
 static void check_diagonal(void) {
@@ -268,6 +300,7 @@ int main(void) {
   check_hints();
   check_infinite();
   check_start_scene();
+  check_hint_open();
   check_diagonal();
   TEST_END();
 }

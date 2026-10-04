@@ -96,4 +96,10 @@ void player_volume(int step);
 // The overlay drawn over the pictures (NULL: none).
 void player_set_overlay(player_overlay_fn fn);
 
+// A tone of `hz` for `ms` over the clip's sound (the game's input sounds),
+// at the volume: heard with the samples the audio takes next, so after
+// the output's lead (about 0.1 s), or once the next clip's sound begins
+// when one starts now; none while paused.
+void player_beep(uint32_t hz, uint32_t ms);
+
 #endif  // PLAYER_H

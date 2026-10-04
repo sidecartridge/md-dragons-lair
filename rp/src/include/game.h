@@ -97,12 +97,14 @@ void game_tick(game_t *g, uint32_t clip_ms, uint32_t held, uint32_t random,
 void game_start(game_t *g, uint32_t held, game_out_t *out);
 
 // After a game over, when the options allow it: the game goes on from the
-// scene lost in, with the starting lives and the score at 0.
-void game_continue(game_t *g, game_out_t *out);
+// scene lost in, with the starting lives and the score at 0 (`held`: the
+// inputs held, the fire that continued it no move).
+void game_continue(game_t *g, uint32_t held, game_out_t *out);
 
 // The move that passes now or next in the current sequence (a window not
-// yet over that leads on, not to a death): its input, and whether its
-// window is open. False when there is none.
+// yet over that leads on, not to a death; an open one first, else the one
+// that opens first): its input, and whether its window is open. False when
+// there is none.
 bool game_hint(const game_t *g, uint8_t *input, bool *open);
 
 #endif  // GAME_H
