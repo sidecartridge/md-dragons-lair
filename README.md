@@ -106,10 +106,12 @@ This project builds on the work of others, with thanks:
 
 - **[DirkSimple](https://github.com/icculus/DirkSimple)** by Ryan C. Gordon (zlib licence): the
   game's logic, its scenes, sequences, move windows, deaths and points, comes from DirkSimple's
-  `game.lua`, its re-creation of the arcade game from the original ROM's data.
+  `game.lua`, its re-creation of the arcade game from the original ROM's data (vendored unchanged
+  in `third_party/dirksimple`).
 - **[SNES Super Dragon's Lair Arcade](https://github.com/astrobleem/SNES-SuperDragonsLairArcade)**
   by Chad Doebelin (MIT licence): its laserdisc segment table (`segment_timing.json`) is how the
-  laserdisc's frames, which DirkSimple's sequences start at, are found in the CD-ROM's clips.
+  laserdisc's frames, which DirkSimple's sequences start at, are found in the CD-ROM's clips
+  (vendored unchanged in `third_party/snes-superdragonslairarcade`).
 - **[pl_mpeg](https://github.com/phoboslab/pl_mpeg)** by Dominic Szablewski (MIT licence): the
   MPEG-1 video and MP2 audio decoding tables (`tools/gen_mpeg1_tables.py`,
   `tools/gen_mp2_tables.py`).
