@@ -146,6 +146,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         ikbd_demux.c
         hw_config.c
         iso9660.c
+        manifest.c
         mp2_audio.c
         mpeg1_idct_asm.S
         mpeg1_video.c

@@ -12,15 +12,20 @@
  *                       module's memory, to copy; 0, or nonzero on an error
  * and calls dl_mount(), then for a clip dl_convert_start() and
  * dl_convert_step() until it returns 0 (the file complete) or less (an
- * error). One clip at a time per module: a worker each for several.
+ * error). One clip at a time per module: a worker each for several. Each
+ * complete clip gives its manifest entry (dl_manifest_entry()); a set's
+ * entries, in the image's order, give the manifest's header
+ * (dl_manifest_header()): SET.DLM is the header, then the entries.
  */
 
 #include <emscripten.h>
 #include <string.h>
 
 #include "convjob.h"
+#include "crc32.h"
 #include "ff.h"
 #include "iso9660.h"
+#include "manifest.h"
 
 EM_JS(double, js_size, (void), { return Module.dlSize(); });
 
@@ -241,4 +246,34 @@ EMSCRIPTEN_KEEPALIVE int dl_convert_progress(void) {
 // The clip file's CRC-32 (its header's), once complete.
 EMSCRIPTEN_KEEPALIVE uint32_t dl_convert_crc(void) {
   return s_writer.header.crc;
+}
+
+static uint8_t s_manifest[MANIFEST_HEADER_BYTES];
+
+// The manifest entry of scene clip `index`, once its file is complete:
+// MANIFEST_ENTRY_BYTES at the pointer, valid until the next call.
+EMSCRIPTEN_KEEPALIVE const uint8_t *dl_manifest_entry(int index) {
+  iso9660_entry_t entry;
+  if (!find_clip(index, &entry)) {
+    return NULL;
+  }
+  manifest_entry_t e;
+  manifest_entry_of(&e, entry.name, &s_writer.header,
+                    (uint32_t)s_job.out.size);
+  manifest_entry_write(&e, s_manifest);
+  return s_manifest;
+}
+
+// The manifest's header for `count` entries at `entries` (the set's, in
+// the image's order) of a set for `gun_bits`: MANIFEST_HEADER_BYTES at the
+// pointer, valid until the next call.
+EMSCRIPTEN_KEEPALIVE const uint8_t *dl_manifest_header(const uint8_t *entries,
+                                                       int count,
+                                                       int gun_bits) {
+  manifest_header_t h = {(uint16_t)count, (uint8_t)gun_bits, CONVERT_VERSION,
+                         CONVERT_KEEP_PERCENT,
+                         crc32_update(0, entries,
+                                      (size_t)count * MANIFEST_ENTRY_BYTES)};
+  manifest_header_write(&h, s_manifest);
+  return s_manifest;
 }

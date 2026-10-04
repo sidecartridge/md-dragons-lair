@@ -22,13 +22,13 @@ run() {
 CFLAGS="-std=c11 -O3 -Wall -Wextra -Werror -Wno-unknown-pragmas"
 SOURCES="rp/src/convjob.c rp/src/convert.c rp/src/clip.c rp/src/mpeg1_video.c \
   rp/src/mpeg_ps.c rp/src/mp2_audio.c rp/src/picture16.c rp/src/cadence.c \
-  rp/src/crc32.c rp/src/iso9660.c web/src/dlweb.c"
+  rp/src/crc32.c rp/src/iso9660.c rp/src/manifest.c web/src/dlweb.c"
 
 mkdir -p "$ROOT/web/dist"
 # shellcheck disable=SC2086
 run emcc $CFLAGS -I web/src -I rp/src/include $SOURCES \
   -sMODULARIZE -sEXPORT_ES6 -sENVIRONMENT=web,worker,node \
-  -sEXPORTED_RUNTIME_METHODS=UTF8ToString \
+  -sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8 -sEXPORTED_FUNCTIONS=_malloc,_free \
   -o web/dist/dlconv.mjs
 echo "Built web/dist/dlconv.mjs and dlconv.wasm"
 

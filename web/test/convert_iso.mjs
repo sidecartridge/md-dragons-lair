@@ -4,7 +4,8 @@
 //   node web/test/convert_iso.mjs IMAGE BITS OUT_DIR [FIRST [COUNT]]
 //
 // BITS: 3 (an ST) or 4 (an STE). For each clip: its name, its file's size
-// and CRC-32 (the header's), and the time it took.
+// and CRC-32 (the header's), and the time it took. With every clip (no
+// FIRST), the set's manifest too, SET.DLM.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -43,6 +44,7 @@ const first = Number(firstArg ?? 0);
 const count = Math.min(Number(countArg ?? clips), clips - first);
 fs.mkdirSync(outDir, { recursive: true });
 let failed = 0;
+const entries = [];
 const t0 = performance.now();
 for (let i = first; i < first + count; i++) {
   const name = m.UTF8ToString(m._dl_clip_name(i)).replace(/\.MPG$/, '');
@@ -61,7 +63,20 @@ for (let i = first; i < first + count; i++) {
     console.log(`${name}: failed (${r})`);
   } else {
     console.log(`${name}: ${fs.statSync(file).size} bytes, CRC-32 ${crc}, ${ms} ms`);
+    const p = m._dl_manifest_entry(i);
+    entries.push(m.HEAPU8.slice(p, p + 32));
   }
+}
+if (firstArg === undefined && failed === 0) {
+  const all = new Uint8Array(entries.length * 32);
+  entries.forEach((e, i) => all.set(e, i * 32));
+  const buf = m._malloc(all.length);
+  m.HEAPU8.set(all, buf);
+  const h = m._dl_manifest_header(buf, entries.length, bits);
+  const header = m.HEAPU8.slice(h, h + 32);
+  m._free(buf);
+  fs.writeFileSync(path.join(outDir, 'SET.DLM'), Buffer.concat([header, all]));
+  console.log(`SET.DLM: ${entries.length} clips`);
 }
 console.log(`${count} clips, ${failed} failed, ${((performance.now() - t0) / 1000).toFixed(1)} s`);
 process.exit(failed ? 1 : 0);

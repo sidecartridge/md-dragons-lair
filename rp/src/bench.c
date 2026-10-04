@@ -27,6 +27,7 @@
 #include "convjob.h"
 #include "fb_blit.h"
 #include "iso9660.h"
+#include "manifest.h"
 #include "mp2_audio.h"
 #include "mpeg1_video.h"
 #include "mpeg_ps.h"
@@ -114,6 +115,14 @@ static struct {
   uint64_t read_us;
   uint32_t crc;
 } s_test;
+
+// Without the image: a complete set of clips on the card (see "A set
+// without the image").
+static struct {
+  bool checked;  // at this session's start
+  bool ready;    // a complete set, of `gun_bits`
+  int gun_bits;
+} s_set;
 
 // --- SD card clock ----------------------------------------------------------
 
@@ -588,6 +597,14 @@ static void bench_draw(void) {
       textf(0, 6, C_DIM, "LAST TRIED: %s",
             iso9660_strerror(benchResults.image_result));
     }
+    if (s_set.ready) {
+      textf(0, 8, C_GOOD, "SET     %s, %lu CLIPS, COMPLETE",
+            s_set.gun_bits == 4 ? "STE" : "ST",
+            (unsigned long)benchResults.clips);
+      text(8, 9, C_TEXT, "V: THE CLIPS");
+    } else if (s_set.checked) {
+      text(0, 8, C_BAD, "NO COMPLETE SET OF CLIPS EITHER");
+    }
   }
   if (benchResults.image_found) {
     char name[33];
@@ -614,6 +631,7 @@ static void bench_draw(void) {
   if (!draw_sound_line(24)) {
     text(0, 24, C_DIM,
          benchResults.image_found ? "R READ I/P PICTS A SND X BOOSTER ESC GEM"
+         : s_set.ready            ? "V CLIPS  X BOOSTER  ESC GEM"
                                   : "X BOOSTER  ESC GEM");
   }
 }
@@ -1576,6 +1594,229 @@ static bool conv_file_current(const char *path, const iso9660_entry_t *entry,
   return ok;
 }
 
+// --- The set's manifest -------------------------------------------------------
+//
+// A set (the game's clips for an ST or an STE, in its folder) gets its
+// manifest (manifest.h) once every clip is there: at the end of a run, or
+// at a start that finds them all but no current manifest. A run that has
+// clips to convert deletes the old one first. Without the image, the
+// manifest is what tells a complete set.
+
+static void manifest_path(char *out, size_t n, int gun_bits) {
+  snprintf(out, n, "%s/%s", conv_folder(gun_bits), MANIFEST_FILE);
+}
+
+// Reads clip file `path`'s header and size with `f`. True when it reads.
+static bool clip_file_header(FIL *f, const char *path, clip_header_t *h,
+                             uint32_t *size) {
+  if (f_open(f, path, FA_READ) != FR_OK) {
+    return false;
+  }
+  uint8_t bytes[CLIP_HEADER_BYTES];
+  UINT got = 0;
+  bool ok = f_read(f, bytes, sizeof(bytes), &got) == FR_OK &&
+            got == sizeof(bytes) && clip_header_read(h, bytes) == 0;
+  *size = (uint32_t)f_size(f);
+  f_close(f);
+  return ok;
+}
+
+// The set's manifest header, when it reads and is this converter's for
+// `gun_bits`.
+static bool manifest_current(int gun_bits, manifest_header_t *h) {
+  char path[40];
+  manifest_path(path, sizeof(path), gun_bits);
+  FIL f;
+  if (f_open(&f, path, FA_READ) != FR_OK) {
+    return false;
+  }
+  uint8_t bytes[MANIFEST_HEADER_BYTES];
+  UINT got = 0;
+  bool ok = f_read(&f, bytes, sizeof(bytes), &got) == FR_OK &&
+            got == sizeof(bytes) && manifest_header_read(h, bytes) == 0 &&
+            h->converter == CONVERT_VERSION &&
+            h->keep_percent == CONVERT_KEEP_PERCENT &&
+            h->gun_bits == gun_bits;
+  f_close(&f);
+  return ok;
+}
+
+// Writes the set's manifest from its clip files, every scene clip of the
+// image in its order, each file's header read back. 0, or -1 (a clip file
+// missing or unreadable, or the card: then no manifest).
+static int manifest_write_set(int gun_bits) {
+  typedef struct {
+    FIL out;
+    FIL clip;
+    uint8_t bytes[MANIFEST_ENTRY_BYTES];
+  } manifest_mem_t;
+  manifest_mem_t *m = malloc(sizeof(manifest_mem_t));
+  if (m == NULL) {
+    return -1;
+  }
+  uint32_t t0 = time_us_32();
+  char path[40];
+  manifest_path(path, sizeof(path), gun_bits);
+  bool ok = f_open(&m->out, path, FA_CREATE_ALWAYS | FA_WRITE) == FR_OK;
+  if (!ok) {
+    free(m);
+    return -1;
+  }
+  uint8_t header[MANIFEST_HEADER_BYTES];
+  memset(header, 0, sizeof(header));
+  UINT done = 0;
+  ok = f_write(&m->out, header, sizeof(header), &done) == FR_OK;
+  uint32_t crc = 0;
+  uint16_t count = 0;
+  iso9660_dir_t dir;
+  iso9660_entry_t entry;
+  ok = ok && iso9660_opendir_root(&s_iso, &dir) == ISO9660_OK;
+  while (ok && iso9660_readdir(&dir, &entry) == 1) {
+    if (!is_scene_clip(entry.name)) {
+      continue;
+    }
+    char clip_path[40];
+    conv_path(clip_path, sizeof(clip_path), gun_bits, entry.name);
+    clip_header_t h;
+    uint32_t size = 0;
+    ok = clip_file_header(&m->clip, clip_path, &h, &size);
+    if (ok) {
+      manifest_entry_t e;
+      manifest_entry_of(&e, entry.name, &h, size);
+      manifest_entry_write(&e, m->bytes);
+      crc = crc32_update(crc, m->bytes, MANIFEST_ENTRY_BYTES);
+      ok = f_write(&m->out, m->bytes, MANIFEST_ENTRY_BYTES, &done) == FR_OK &&
+           done == MANIFEST_ENTRY_BYTES;
+      count++;
+    }
+  }
+  if (ok) {
+    manifest_header_t mh = {count, (uint8_t)gun_bits, CONVERT_VERSION,
+                            CONVERT_KEEP_PERCENT, crc};
+    manifest_header_write(&mh, header);
+    ok = f_lseek(&m->out, 0) == FR_OK &&
+         f_write(&m->out, header, sizeof(header), &done) == FR_OK &&
+         done == sizeof(header);
+  }
+  ok = f_close(&m->out) == FR_OK && ok;
+  free(m);
+  if (!ok) {
+    f_unlink(path);
+  }
+  DPRINTF("Manifest %s: %s, %u clips, entries CRC-32 %08lX, %lu ms\n", path,
+          ok ? "written" : "failed", (unsigned)count, (unsigned long)crc,
+          (unsigned long)((time_us_32() - t0) / 1000u));
+  return ok ? 0 : -1;
+}
+
+// --- A set without the image ---------------------------------------------------
+//
+// With no CD-ROM image on the card, the clips come from a complete set
+// alone (the web page's, or the cartridge's with the image gone): the
+// machine's, else the other's, checked against its manifest at every start.
+// The clip list and the player then take the clips' names from it.
+
+// Whether the set of `gun_bits` is complete: its manifest current, its
+// entries' CRC-32 right, and every clip file there as its entry says.
+static bool set_complete(int gun_bits, uint16_t *count) {
+  manifest_header_t mh;
+  if (!manifest_current(gun_bits, &mh) || mh.count == 0) {
+    return false;
+  }
+  typedef struct {
+    FIL list;
+    FIL clip;
+  } set_mem_t;
+  set_mem_t *m = malloc(sizeof(set_mem_t));
+  if (m == NULL) {
+    return false;
+  }
+  char path[40];
+  manifest_path(path, sizeof(path), gun_bits);
+  bool ok = f_open(&m->list, path, FA_READ) == FR_OK &&
+            f_lseek(&m->list, MANIFEST_HEADER_BYTES) == FR_OK;
+  uint32_t crc = 0;
+  for (uint16_t i = 0; ok && i < mh.count; i++) {
+    uint8_t bytes[MANIFEST_ENTRY_BYTES];
+    UINT got = 0;
+    manifest_entry_t e;
+    ok = f_read(&m->list, bytes, sizeof(bytes), &got) == FR_OK &&
+         got == sizeof(bytes) && manifest_entry_read(&e, bytes) == 0;
+    if (ok) {
+      crc = crc32_update(crc, bytes, sizeof(bytes));
+      char clip_path[40];
+      conv_path(clip_path, sizeof(clip_path), gun_bits, e.name);
+      clip_header_t h;
+      uint32_t size = 0;
+      ok = clip_file_header(&m->clip, clip_path, &h, &size) &&
+           manifest_matches(&mh, &e, &h, size);
+    }
+  }
+  f_close(&m->list);
+  free(m);
+  *count = mh.count;
+  return ok && crc == mh.entries_crc;
+}
+
+// At a start with no image: the machine's set, else the other's.
+static void set_check(void) {
+  uint32_t t0 = time_us_32();
+  int bits = conv_machine_bits();
+  uint16_t count = 0;
+  s_set.checked = true;
+  s_set.ready = false;
+  for (int k = 0; k < 2 && !s_set.ready; k++, bits = 7 - bits) {
+    if (set_complete(bits, &count)) {
+      s_set.ready = true;
+      s_set.gun_bits = bits;
+      benchResults.clips = count;
+    }
+  }
+  DPRINTF("No image: %s set %s, %lu clips, %lu ms\n",
+          s_set.ready ? (s_set.gun_bits == 4 ? "the STE" : "the ST") : "no",
+          s_set.ready ? "complete" : "found",
+          (unsigned long)(s_set.ready ? benchResults.clips : 0u),
+          (unsigned long)((time_us_32() - t0) / 1000u));
+  s_dirty = true;
+}
+
+// Whether there are clips to list and play: the image's, or a set's.
+static bool clips_available(void) {
+  return benchResults.clips > 0 && (benchResults.image_found || s_set.ready);
+}
+
+// Scene clip `index`'s name ("S01.MPG"): from the image, else from the
+// set's manifest.
+static bool clip_name_at(int index, char name[MANIFEST_NAME_BYTES]) {
+  if (benchResults.image_found) {
+    iso9660_entry_t entry;
+    if (!show_find_clip(index, &entry)) {
+      return false;
+    }
+    snprintf(name, MANIFEST_NAME_BYTES, "%s", entry.name);
+    return true;
+  }
+  if (!s_set.ready || index < 0 || index >= (int)benchResults.clips) {
+    return false;
+  }
+  char path[40];
+  manifest_path(path, sizeof(path), s_set.gun_bits);
+  FIL f;
+  uint8_t bytes[MANIFEST_ENTRY_BYTES];
+  UINT got = 0;
+  manifest_entry_t e;
+  bool ok = f_open(&f, path, FA_READ) == FR_OK &&
+            f_lseek(&f, MANIFEST_HEADER_BYTES +
+                            (FSIZE_t)index * MANIFEST_ENTRY_BYTES) == FR_OK &&
+            f_read(&f, bytes, sizeof(bytes), &got) == FR_OK &&
+            got == sizeof(bytes) && manifest_entry_read(&e, bytes) == 0;
+  f_close(&f);
+  if (ok) {
+    memcpy(name, e.name, MANIFEST_NAME_BYTES);
+  }
+  return ok;
+}
+
 // Text at twice the font's size, from (x, y) in pixels.
 static void text2x(int x, int y, int color, const char *str) {
   for (; *str != '\0'; str++, x += 16) {
@@ -1903,6 +2144,9 @@ static void conv_all_next(void) {
     conv_begin(&entry);
     return;
   }
+  if (s_cv.failed == 0) {
+    manifest_write_set(s_cv.gun_bits);
+  }
   s_cv.done = true;
   DPRINTF("Convert all for %s: %d converted, %d ready, %d failed, %lu MB, "
           "%lu s\n",
@@ -1917,7 +2161,13 @@ static void conv_all_next(void) {
 // not ready converted. `quiet` (an ST's start): with every clip ready, the
 // bench goes on at once.
 static void conv_all_start(bool quiet) {
-  if (!benchResults.image_found || bench_busy()) {
+  if (!benchResults.image_found) {
+    if (benchResults.sd_ok && !bench_busy()) {
+      set_check();
+    }
+    return;
+  }
+  if (bench_busy()) {
     return;
   }
   if (s_sound.active) {
@@ -1955,6 +2205,19 @@ static void conv_all_start(bool quiet) {
   DPRINTF("Convert all for %s: %d clips, %d ready, %d to convert\n",
           s_cv.gun_bits == 4 ? "an STE" : "an ST", s_cv.total, s_cv.ready,
           s_cv.todo);
+  // The set's manifest: written now when every clip is there and it is
+  // missing or old; deleted when clips are to be converted (the run's end
+  // writes it again).
+  manifest_header_t mh;
+  bool listed = manifest_current(s_cv.gun_bits, &mh) &&
+                mh.count == (uint16_t)s_cv.total;
+  if (s_cv.todo == 0 && !listed) {
+    manifest_write_set(s_cv.gun_bits);
+  } else if (s_cv.todo > 0) {
+    char path[40];
+    manifest_path(path, sizeof(path), s_cv.gun_bits);
+    f_unlink(path);
+  }
   s_cv.run_t0 = time_us_64();
   if (s_cv.todo == 0 && quiet) {
     s_cv.active = false;
@@ -2549,14 +2812,14 @@ static void play_start(int index, int bits, uint32_t frame, bool paused) {
   if (s_sound.active) {
     sound_stop();
   }
-  iso9660_entry_t entry;
   if (index < 0) {
     index = (int)benchResults.clips - 1;
   }
   if (index >= (int)benchResults.clips) {
     index = 0;
   }
-  if (!benchResults.image_found || !show_find_clip(index, &entry)) {
+  char clip_name[MANIFEST_NAME_BYTES];
+  if (!clips_available() || !clip_name_at(index, clip_name)) {
     return;
   }
   memset(&s_play, 0, sizeof(s_play));
@@ -2567,7 +2830,7 @@ static void play_start(int index, int bits, uint32_t frame, bool paused) {
   s_play.t0 = s_play.called;
   s_play.paused = paused;
   snprintf(s_play.name, sizeof(s_play.name), "%.*s",
-           (int)(strlen(entry.name) - 4), entry.name);
+           (int)(strlen(clip_name) - 4), clip_name);
   if (s_clips.active) {
     s_clips.sel = index;
   }
@@ -2578,11 +2841,11 @@ static void play_start(int index, int bits, uint32_t frame, bool paused) {
   }
   // The set asked for; with none, the machine's, else the other's.
   s_play.bits = bits != 0 ? bits : conv_machine_bits();
-  conv_path(s_play.path, sizeof(s_play.path), s_play.bits, entry.name);
+  conv_path(s_play.path, sizeof(s_play.path), s_play.bits, clip_name);
   FRESULT fr = f_open(&s_play.m->f, s_play.path, FA_READ);
   if (fr != FR_OK && bits == 0) {
     s_play.bits = 7 - s_play.bits;
-    conv_path(s_play.path, sizeof(s_play.path), s_play.bits, entry.name);
+    conv_path(s_play.path, sizeof(s_play.path), s_play.bits, clip_name);
     fr = f_open(&s_play.m->f, s_play.path, FA_READ);
   }
   if (fr != FR_OK) {
@@ -2915,7 +3178,7 @@ static void soak_next(void) {
 
 // L: every clip from `index` to the last, in set `bits`.
 static void soak_start(int index, int bits) {
-  if (s_play.active || !benchResults.image_found) {
+  if (s_play.active || !clips_available()) {
     return;
   }
   memset(&s_soak, 0, sizeof(s_soak));
@@ -2925,13 +3188,26 @@ static void soak_start(int index, int bits) {
   soakResults.drift_us[1] = INT32_MIN;
   soakResults.lead_ms = INT32_MAX;
   s_clips.active = true;
-  s_clips.bits = bits != 0 ? bits : conv_machine_bits();
+  s_clips.bits = bits != 0                    ? bits
+                 : benchResults.image_found ? conv_machine_bits()
+                                            : s_set.gun_bits;
   s_soak.active = true;
   s_soak.t0 = time_us_32();
   s_soak.index = index < 0 ? 0 : index;
   DPRINTF("Soak from clip %d, %s set\n", s_soak.index,
           s_clips.bits == 4 ? "STE" : "ST");
   play_start(s_soak.index, s_clips.bits, 0, false);
+}
+
+// A clip's name in the list: its place on the page, without ".MPG".
+static void clips_draw_name(int slot, bool sel, const char *name) {
+  int col = (slot / CLIPS_ROWS) * 10;
+  int row = 2 + slot % CLIPS_ROWS;
+  char shown[12];
+  size_t n = strlen(name);
+  snprintf(shown, sizeof(shown), "%.*s", (int)(n > 4 ? n - 4 : n), name);
+  text(col, row, sel ? C_TITLE : C_VALUE, sel ? ">" : " ");
+  text(col + 1, row, sel ? C_TITLE : C_VALUE, shown);
 }
 
 static void clips_draw(void) {
@@ -2947,26 +3223,42 @@ static void clips_draw(void) {
         first / CLIPS_PAGE + 1,
         ((int)benchResults.clips + CLIPS_PAGE - 1) / CLIPS_PAGE);
   rule(1);
-  iso9660_dir_t dir;
-  iso9660_entry_t entry;
-  if (iso9660_opendir_root(&s_iso, &dir) == ISO9660_OK) {
-    int n = 0;
-    while (n < first + CLIPS_PAGE && iso9660_readdir(&dir, &entry) == 1) {
-      if (!is_scene_clip(entry.name)) {
-        continue;
+  int last = first + CLIPS_PAGE < (int)benchResults.clips
+                 ? first + CLIPS_PAGE
+                 : (int)benchResults.clips;
+  if (benchResults.image_found) {
+    iso9660_dir_t dir;
+    iso9660_entry_t entry;
+    if (iso9660_opendir_root(&s_iso, &dir) == ISO9660_OK) {
+      int n = 0;
+      while (n < last && iso9660_readdir(&dir, &entry) == 1) {
+        if (is_scene_clip(entry.name)) {
+          if (n >= first) {
+            clips_draw_name(n - first, n == s_clips.sel, entry.name);
+          }
+          n++;
+        }
       }
-      if (n >= first) {
-        int slot = n - first;
-        int col = (slot / CLIPS_ROWS) * 10;
-        int row = 2 + slot % CLIPS_ROWS;
-        char name[12];
-        snprintf(name, sizeof(name), "%.*s", (int)(strlen(entry.name) - 4),
-                 entry.name);
-        bool sel = n == s_clips.sel;
-        text(col, row, sel ? C_TITLE : C_VALUE, sel ? ">" : " ");
-        text(col + 1, row, sel ? C_TITLE : C_VALUE, name);
+    }
+  } else {
+    // The page's names from the set's manifest, read in one pass.
+    char path[40];
+    manifest_path(path, sizeof(path), s_set.gun_bits);
+    FIL f;
+    if (f_open(&f, path, FA_READ) == FR_OK &&
+        f_lseek(&f, MANIFEST_HEADER_BYTES +
+                        (FSIZE_t)first * MANIFEST_ENTRY_BYTES) == FR_OK) {
+      for (int n = first; n < last; n++) {
+        uint8_t bytes[MANIFEST_ENTRY_BYTES];
+        UINT got = 0;
+        manifest_entry_t e;
+        if (f_read(&f, bytes, sizeof(bytes), &got) != FR_OK ||
+            got != sizeof(bytes) || manifest_entry_read(&e, bytes) != 0) {
+          break;
+        }
+        clips_draw_name(n - first, n == s_clips.sel, e.name);
       }
-      n++;
+      f_close(&f);
     }
   }
   text(0, 22, C_TEXT, "RETURN: PLAY   L: ALL FROM HERE");
@@ -2976,7 +3268,7 @@ static void clips_draw(void) {
 
 // V: the list.
 static void clips_open(void) {
-  if (!benchResults.image_found || benchResults.clips == 0) {
+  if (!clips_available()) {
     return;
   }
   if (s_sound.active) {
@@ -2984,7 +3276,8 @@ static void clips_open(void) {
   }
   s_clips.active = true;
   if (s_clips.bits == 0) {
-    s_clips.bits = conv_machine_bits();
+    s_clips.bits =
+        benchResults.image_found ? conv_machine_bits() : s_set.gun_bits;
   }
   s_dirty = true;
 }
@@ -3471,6 +3764,14 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
                    payload_size >= 6u ? payload[2] : 0u, false);
       } else if (s_play.active || s_soak.active) {
         play_stop();
+      }
+      return 1;
+    case DEVHOOKS_APP_NO_IMAGE:
+      if (benchResults.image_found && !bench_busy()) {
+        iso9660_unmount(&s_iso);
+        benchResults.image_found = false;
+        benchResults.clips = 0;
+        set_check();
       }
       return 1;
     case DEVHOOKS_APP_SOAK:
