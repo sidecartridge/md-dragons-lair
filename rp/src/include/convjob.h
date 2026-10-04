@@ -37,8 +37,10 @@ enum {
 // frame's.
 #define CONVJOB_SOUND_BYTES (CLIP_SAMPLES + MP2_FRAME_SAMPLES)
 
-// The clip file's pieces: 4 KB writes run at about 1 MB/s on the card.
-#define CONVJOB_OUT_BYTES 4096
+// The clip file's pieces: 2 KB writes run at about 1 MB/s on the card, as
+// fast as 4 KB ones (963 and 980 KB/s), and keep the job small: it has to
+// fit the heap's hole below the frame store's rows.
+#define CONVJOB_OUT_BYTES 2048
 
 typedef struct {
   // The frame store's rows, MPEG1_SLOT_BYTES each, 4-byte aligned: the
