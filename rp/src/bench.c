@@ -1411,14 +1411,14 @@ static void sound_slice(void) {
 // --- Conversion -----------------------------------------------------------------
 //
 // A scene clip converted on the cartridge into the app's clip file
-// (convjob.h), BENCH_FOLDER/<clip>.DLC, for the palette of the machine
-// plugged in (3 bits a gun for an ST, 4 for an STE, a TT or a Falcon). The
-// frame store takes the in-place test's 17 rows; the converter's other
-// buffers go where those leave room: the scaler's chroma ring and the
-// sound after the rows in fb_planar_scratch, the scaled luma lines and the
-// MP2 samples after the rows in the cartridge window's framebuffer, the MP2
-// decoder after its row in APP_FREE, the writer and the sound's
-// demultiplexer after the rows in fb_chunked_buffer. The ST keeps the screen
+// (convjob.h), <clip>.DLC in BENCH_FOLDER/STE or /ST, for the palette of
+// the machine plugged in (3 bits a gun for an ST, 4 for an STE, a TT or a
+// Falcon). The frame store takes the in-place test's 17 rows; the
+// converter's other buffers go where those leave room: the scaler's chroma
+// ring and the sound after the rows in fb_planar_scratch, the scaled luma
+// lines and the MP2 samples after the rows in the cartridge window's
+// framebuffer, the MP2 decoder after its row in APP_FREE, the writer and the
+// sound's demultiplexer after the rows in fb_chunked_buffer. The ST keeps the screen
 // shown when the conversion started; its bar fills by changing the palette
 // alone.
 
@@ -1442,19 +1442,60 @@ _Static_assert(7 * MPEG1_SLOT_BYTES + ALIGN4(sizeof(clip_writer_t)) +
                    320 * 200,
                "fb_chunked_buffer: 7 rows, the writer and a demultiplexer");
 
+// The whole game: every scene clip converted into BENCH_FOLDER/ST or
+// BENCH_FOLDER/STE (the machine's palette), clip after clip; those already
+// complete and current are passed over (conv_file_current()), so a run
+// stopped anywhere carries on at the next start. It starts by itself when
+// an ST says hello and a clip is missing (bench_restart()), or with C.
+// While a clip converts only the palette moves on the screen (the clip's
+// bar, the title's glow); the whole game's bar and the time left are drawn
+// again between clips. One clip alone (the debug hook) shows its times.
+
+// Before a clip of the run is done, the time left at the rate measured on
+// the cartridge: 115 s for S01's 6.45 MB.
+#define CONV_US_PER_KB 17800u
+
+// How long a clip's screen is published again for an ST still starting.
+#define CONV_SHOWN_TIMEOUT_US 6000000u
+
+// The title's glow, a step a picture.
+static const uint16_t conv_glow[] = {
+    PALETTE_RGB(7, 6, 1), PALETTE_RGB(7, 7, 2), PALETTE_RGB(7, 7, 4),
+    PALETTE_RGB(7, 7, 2), PALETTE_RGB(7, 6, 1), PALETTE_RGB(6, 5, 1),
+    PALETTE_RGB(5, 4, 0), PALETTE_RGB(6, 5, 1)};
+#define CONV_GLOWS ((int)(sizeof(conv_glow) / sizeof(conv_glow[0])))
+
+static bool bench_busy(void);
+
 static struct {
   bool active;
   bool done;
+  bool all;       // the whole game, clip after clip
+  bool checking;  // the clips being checked, before the run
+  bool stopped;   // SPACE stopped the run
   int clip_index;
   char clip[16];
-  char out_path[32];
+  char out_path[40];
   int gun_bits;
   convjob_t *job;     // on the heap while it runs
   uint8_t *rows;      // and two of the frame store's rows, in one block:
                       // newlib grows the heap in 4 KB steps from each
                       // request, and two of 8.4 KB take 24 KB
   int lit;  // segments lit
+  int glow;
   int result;
+  // The whole game's run.
+  int total;       // scene clips
+  int todo;        // to convert when the run began
+  int converted;   // this run
+  int failed;
+  int ready;       // complete and current when the run began
+  uint64_t total_bytes;  // the clips' sources
+  uint64_t done_bytes;   // complete, converted or failed
+  uint64_t run_bytes;    // converted or failed this run
+  uint64_t out_bytes;    // written this run
+  uint32_t clip_bytes;   // the clip converting
+  uint64_t run_t0;       // 64 bits: a run can outlast time_us_32()'s 71 min
 } s_cv;
 
 // The last conversion, readable over SWD as well as on the screen.
@@ -1485,6 +1526,7 @@ __attribute__((used)) conv_results_t convResults;
 static const uint16_t *conv_palette(int lit) {
   static uint16_t words[16];
   memcpy(words, bench_palette, sizeof(words));
+  words[C_TITLE] = conv_glow[s_cv.glow % CONV_GLOWS];
   for (int s = 0; s < CONV_SEGMENTS; s++) {
     words[CONV_FIRST_SEGMENT + s] =
         s < lit ? PALETTE_RGB(2, 7, 2) : PALETTE_RGB(1, 1, 2);
@@ -1492,7 +1534,141 @@ static const uint16_t *conv_palette(int lit) {
   return words;
 }
 
+static int conv_machine_bits(void) {
+  return (st_session_machine() >> 4) == 0 ? 3 : 4;  // an ST: 3 bits a gun
+}
+
+static const char *conv_folder(int gun_bits) {
+  return gun_bits == 4 ? BENCH_FOLDER "/STE" : BENCH_FOLDER "/ST";
+}
+
+// `out`: the clip file of the scene clip `name` for a palette of `gun_bits`.
+static void conv_path(char *out, size_t n, int gun_bits, const char *name) {
+  char base[16];
+  snprintf(base, sizeof(base), "%s", name);
+  char *dot = strchr(base, '.');
+  if (dot != NULL) {
+    *dot = '\0';
+  }
+  snprintf(out, n, "%s/%s.DLC", conv_folder(gun_bits), base);
+}
+
+// Whether `path` holds the clip file the cartridge would write now for
+// `entry`: complete (its index ends it; the header is written last), of the
+// converter's version and stability, for `gun_bits`, of a source this size.
+static bool conv_file_current(const char *path, const iso9660_entry_t *entry,
+                              int gun_bits) {
+  FIL f;
+  if (f_open(&f, path, FA_READ) != FR_OK) {
+    return false;
+  }
+  uint8_t bytes[CLIP_HEADER_BYTES];
+  UINT got = 0;
+  clip_header_t h;
+  bool ok = f_read(&f, bytes, sizeof(bytes), &got) == FR_OK &&
+            got == sizeof(bytes) && clip_header_read(&h, bytes) == 0 &&
+            h.converter == CONVERT_VERSION &&
+            h.keep_percent == CONVERT_KEEP_PERCENT && h.gun_bits == gun_bits &&
+            h.source_bytes == entry->size && h.frames > 0 &&
+            h.index_count > 0 &&
+            (FSIZE_t)h.index_offset + 8u * h.index_count == f_size(&f);
+  f_close(&f);
+  return ok;
+}
+
+// Text at twice the font's size, from (x, y) in pixels.
+static void text2x(int x, int y, int color, const char *str) {
+  for (; *str != '\0'; str++, x += 16) {
+    int ch = (unsigned char)*str;
+    if (ch < font8x8.first_char ||
+        ch >= font8x8.first_char + font8x8.num_chars) {
+      continue;
+    }
+    const unsigned char *glyph = &font8x8.data[(ch - font8x8.first_char) * 8];
+    for (int r = 0; r < 8; r++) {
+      for (int c = 0; c < 8; c++) {
+        if (glyph[r] & (1u << c)) {
+          fb_fill_rect(x + 2 * c, y + 2 * r, 2, 2, color);
+        }
+      }
+    }
+  }
+}
+
+static void text_centred(int row, int color, const char *str) {
+  text((40 - (int)strlen(str)) / 2, row, color, str);
+}
+
+// Minutes, rounded up, of `us`.
+static unsigned long conv_minutes(uint64_t us) {
+  return (unsigned long)((us + 59999999u) / 60000000u);
+}
+
+// The whole game's screen: checking, converting a clip, or the end.
+static void conv_draw_all(void) {
+  fb_chunked_clear(C_BACK);
+  font_set_font(&font8x8);
+  text2x((320 - 16 * 13) / 2, 8, C_TITLE, "DRAGON'S LAIR");
+  bool ste = s_cv.gun_bits == 4;
+  text_centred(4, C_TEXT, ste ? "PREPARING THE GAME FOR AN STE"
+                              : "PREPARING THE GAME FOR AN ST");
+  text_centred(5, C_DIM, ste ? "4,096 COLOURS, ON THE SD CARD"
+                             : "512 COLOURS, ON THE SD CARD");
+  if (s_cv.checking) {
+    text_centred(12, C_TEXT, "CHECKING THE CLIPS ON THE CARD");
+    return;
+  }
+  uint64_t run_us = time_us_64() - s_cv.run_t0;
+  if (s_cv.done) {
+    if (s_cv.stopped) {
+      text_centred(9, C_TEXT, "STOPPED");
+      text_centred(11, C_DIM, "THE NEXT START CARRIES ON");
+      text_centred(12, C_DIM, "WHERE IT STOPPED");
+    } else if (s_cv.failed == 0) {
+      text_centred(9, C_GOOD, "THE GAME IS READY");
+    } else {
+      text_centred(9, C_BAD, "READY, BUT SOME CLIPS FAILED");
+    }
+    textf(4, 15, C_TEXT, "CLIPS CONVERTED   %4d", s_cv.converted);
+    textf(4, 16, C_TEXT, "ALREADY THERE     %4d", s_cv.ready);
+    if (s_cv.failed > 0) {
+      textf(4, 17, C_BAD, "FAILED            %4d", s_cv.failed);
+    }
+    textf(4, 18, C_TEXT, "WRITTEN           %4lu MB",
+          (unsigned long)(s_cv.out_bytes / 1000000u));
+    textf(4, 19, C_TEXT, "TIME              %4lu MIN", conv_minutes(run_us));
+    text_centred(24, C_DIM, "SPACE: CONTINUE");
+    return;
+  }
+  int n = s_cv.converted + s_cv.failed + 1;
+  textf(2, 8, C_TEXT, "THIS CLIP  %-10s  %3d OF %d", s_cv.clip, n, s_cv.todo);
+  for (int seg = 0; seg < CONV_SEGMENTS; seg++) {
+    fb_fill_rect(16 + seg * 32, 80, 30, 12, CONV_FIRST_SEGMENT + seg);
+  }
+  uint64_t total = s_cv.total_bytes ? s_cv.total_bytes : 1u;
+  int percent = (int)(s_cv.done_bytes * 100u / total);
+  textf(2, 13, C_TEXT, "THE WHOLE GAME  %3d %%", percent);
+  fb_fill_rect(16, 116, 288, 12, C_DIM);
+  fb_fill_rect(16, 116, (int)(288u * s_cv.done_bytes / total), 12, C_GOOD);
+  uint64_t left = s_cv.total_bytes - s_cv.done_bytes;
+  uint64_t left_us = s_cv.run_bytes > 0
+                         ? left * run_us / s_cv.run_bytes
+                         : left / 1024u * CONV_US_PER_KB;
+  textf(2, 17, C_VALUE, "TIME LEFT       ABOUT %lu MIN",
+        conv_minutes(left_us));
+  textf(2, 18, C_DIM, "ELAPSED         %lu MIN",
+        (unsigned long)(run_us / 60000000u));
+  text_centred(22, C_DIM, "THE ST CAN BE LEFT ALONE.");
+  text_centred(23, C_DIM, "SPACE STOPS; THE NEXT START");
+  text_centred(24, C_DIM, "CARRIES ON WHERE IT STOPPED.");
+}
+
+// One clip's screen and times (the debug hook's).
 static void conv_draw(void) {
+  if (s_cv.all) {
+    conv_draw_all();
+    return;
+  }
   fb_chunked_clear(C_BACK);
   font_set_font(&font8x8);
   text(0, 0, C_TITLE, "CONVERTING A CLIP ON THE CARTRIDGE");
@@ -1544,8 +1720,8 @@ static void conv_release_heap(void) {
   s_cv.job = NULL;
 }
 
-static void conv_finish(int result) {
-  s_cv.done = true;
+// A clip ended (or never started): its results, its memory freed.
+static void conv_record(int result) {
   s_cv.result = result;
   conv_results_t *r = &convResults;
   memset(r, 0, sizeof(*r));
@@ -1553,8 +1729,6 @@ static void conv_finish(int result) {
   r->gun_bits = (uint32_t)s_cv.gun_bits;
   if (s_cv.job == NULL) {
     conv_release_heap();
-    palette_set(conv_palette(s_cv.lit));
-    s_dirty = true;
     return;
   }
   const convjob_times_t *t = &s_cv.job->times;
@@ -1593,51 +1767,50 @@ static void conv_finish(int result) {
           (unsigned long)r->write_ms,
           (unsigned long)r->histogram_ms, (unsigned long)r->palette_ms,
           (unsigned long)r->dither_ms);
+}
+
+static void conv_all_next(void);
+
+// A clip ended: one clip alone shows its times; in a run, the next begins.
+static void conv_finish(int result) {
+  conv_record(result);
+  if (s_cv.all) {
+    if (result == 0) {
+      s_cv.converted++;
+      s_cv.out_bytes += convResults.bytes;
+    } else {
+      s_cv.failed++;
+    }
+    s_cv.done_bytes += s_cv.clip_bytes;
+    s_cv.run_bytes += s_cv.clip_bytes;
+    conv_all_next();
+    return;
+  }
+  s_cv.done = true;
   palette_set(conv_palette(result == 0 ? CONV_SEGMENTS : s_cv.lit));
   s_dirty = true;
 }
 
-// `gun_bits` 0: the machine plugged in's.
-static void conv_start(int index, int gun_bits) {
-  if (!benchResults.image_found || s_test.running || s_test.pending ||
-      s_show.active || s_ip.active || s_cv.active) {
-    return;
-  }
-  if (s_sound.active) {
-    sound_stop();  // its decoder is on the heap
-  }
-  if (index < 0) {
-    index = (int)benchResults.clips - 1;
-  }
-  if (index >= (int)benchResults.clips) {
-    index = 0;
-  }
-  iso9660_entry_t entry;
-  if (!show_find_clip(index, &entry)) {
-    return;
-  }
-  memset(&s_cv, 0, sizeof(s_cv));
-  s_cv.active = true;
-  s_cv.clip_index = index;
-  snprintf(s_cv.clip, sizeof(s_cv.clip), "%s", entry.name);
-  char base[16];
-  snprintf(base, sizeof(base), "%s", entry.name);
-  char *dot = strchr(base, '.');
-  if (dot != NULL) {
-    *dot = '\0';
-  }
-  snprintf(s_cv.out_path, sizeof(s_cv.out_path), "%s/%s.DLC", BENCH_FOLDER,
-           base);
-  // The machine plugged in: an ST's palette has 3 bits a gun.
-  s_cv.gun_bits = gun_bits != 0                        ? gun_bits
-                  : (st_session_machine() >> 4) == 0 ? 3
-                                                       : 4;
+// Converts `entry` into its clip file for s_cv.gun_bits: the screen first,
+// then the memory and the job.
+static void conv_begin(const iso9660_entry_t *entry) {
+  snprintf(s_cv.clip, sizeof(s_cv.clip), "%s", entry->name);
+  conv_path(s_cv.out_path, sizeof(s_cv.out_path), s_cv.gun_bits, entry->name);
+  s_cv.clip_bytes = entry->size;
+  s_cv.lit = 0;
+  f_mkdir(conv_folder(s_cv.gun_bits));  // FR_EXIST when it is there
 
-  // The screen, shown before its memory goes to the converter.
+  // The screen, shown before its memory goes to the converter. At an ST's
+  // start the hello comes seconds before its loop takes a frame (the IKBD's
+  // reset: 2.8 s on a Mega ST's power-on), and it counts the frame it finds
+  // as seen: the screen is published again until the ST shows one.
   conv_draw();
   palette_set(conv_palette(0));
-  fb_publish();
-  fb_wait_shown(IP_SHOWN_TIMEOUT_US);
+  uint32_t t0 = time_us_32();
+  do {
+    fb_publish();
+  } while (!fb_wait_shown(IP_SHOWN_TIMEOUT_US) &&
+           time_us_32() - t0 < CONV_SHOWN_TIMEOUT_US);
 
   // The small one first: it fits the heap's free block from the boot.
   s_cv.job = malloc(sizeof(convjob_t));
@@ -1681,11 +1854,115 @@ static void conv_start(int index, int gun_bits) {
   bench_start_cycles();
   DPRINTF("Convert %s into %s for %s\n", s_cv.clip, s_cv.out_path,
           s_cv.gun_bits == 4 ? "an STE" : "an ST");
-  int r = convjob_start(s_cv.job, &m, &s_iso, &entry, s_cv.out_path,
+  int r = convjob_start(s_cv.job, &m, &s_iso, entry, s_cv.out_path,
                         s_cv.gun_bits, bench_run2, bench_cycles);
   if (r < 0) {
     conv_finish(r);
   }
+}
+
+// One clip alone (the debug hook), for `gun_bits` (0: the machine's).
+static void conv_start(int index, int gun_bits) {
+  if (!benchResults.image_found || bench_busy()) {
+    return;
+  }
+  if (s_sound.active) {
+    sound_stop();  // its decoder is on the heap
+  }
+  if (index < 0) {
+    index = (int)benchResults.clips - 1;
+  }
+  if (index >= (int)benchResults.clips) {
+    index = 0;
+  }
+  iso9660_entry_t entry;
+  if (!show_find_clip(index, &entry)) {
+    return;
+  }
+  memset(&s_cv, 0, sizeof(s_cv));
+  s_cv.active = true;
+  s_cv.clip_index = index;
+  s_cv.gun_bits = gun_bits != 0 ? gun_bits : conv_machine_bits();
+  conv_begin(&entry);
+}
+
+// The run's next clip that is not ready yet, after s_cv.clip_index; none
+// left: the run's end.
+static void conv_all_next(void) {
+  iso9660_entry_t entry;
+  for (int i = s_cv.clip_index + 1; i < (int)benchResults.clips; i++) {
+    if (!show_find_clip(i, &entry)) {
+      continue;
+    }
+    char path[40];
+    conv_path(path, sizeof(path), s_cv.gun_bits, entry.name);
+    if (conv_file_current(path, &entry, s_cv.gun_bits)) {
+      continue;
+    }
+    s_cv.clip_index = i;
+    conv_begin(&entry);
+    return;
+  }
+  s_cv.done = true;
+  DPRINTF("Convert all for %s: %d converted, %d ready, %d failed, %lu MB, "
+          "%lu s\n",
+          s_cv.gun_bits == 4 ? "an STE" : "an ST", s_cv.converted,
+          s_cv.ready, s_cv.failed, (unsigned long)(s_cv.out_bytes / 1000000u),
+          (unsigned long)((time_us_64() - s_cv.run_t0) / 1000000u));
+  palette_set(conv_palette(CONV_SEGMENTS));
+  s_dirty = true;
+}
+
+// The whole game for the machine plugged in: the clips checked, then those
+// not ready converted. `quiet` (an ST's start): with every clip ready, the
+// bench goes on at once.
+static void conv_all_start(bool quiet) {
+  if (!benchResults.image_found || bench_busy()) {
+    return;
+  }
+  if (s_sound.active) {
+    sound_stop();
+  }
+  memset(&s_cv, 0, sizeof(s_cv));
+  s_cv.active = true;
+  s_cv.all = true;
+  s_cv.checking = true;
+  s_cv.gun_bits = conv_machine_bits();
+  s_cv.clip_index = -1;
+  conv_draw();
+  palette_set(conv_palette(0));
+  fb_publish();
+  iso9660_dir_t dir;
+  iso9660_entry_t entry;
+  if (iso9660_opendir_root(&s_iso, &dir) == ISO9660_OK) {
+    while (iso9660_readdir(&dir, &entry) == 1) {
+      if (!is_scene_clip(entry.name)) {
+        continue;
+      }
+      char path[40];
+      conv_path(path, sizeof(path), s_cv.gun_bits, entry.name);
+      s_cv.total++;
+      s_cv.total_bytes += entry.size;
+      if (conv_file_current(path, &entry, s_cv.gun_bits)) {
+        s_cv.ready++;
+        s_cv.done_bytes += entry.size;
+      } else {
+        s_cv.todo++;
+      }
+    }
+  }
+  s_cv.checking = false;
+  DPRINTF("Convert all for %s: %d clips, %d ready, %d to convert\n",
+          s_cv.gun_bits == 4 ? "an STE" : "an ST", s_cv.total, s_cv.ready,
+          s_cv.todo);
+  s_cv.run_t0 = time_us_64();
+  if (s_cv.todo == 0 && quiet) {
+    s_cv.active = false;
+    palette_set(bench_palette);
+    s_dirty = true;
+    return;
+  }
+  conv_all_next();
 }
 
 // One picture a call: the main loop runs between them.
@@ -1700,25 +1977,30 @@ static void conv_frame(void) {
   }
   int r = convjob_step(s_cv.job);
   uint32_t size = s_cv.job->video_file.size;
-  int lit = size ? (int)((uint64_t)s_cv.job->video_file.pos * CONV_SEGMENTS /
-                         size)
-                 : 0;
-  if (lit != s_cv.lit) {
-    s_cv.lit = lit;
-    palette_set(conv_palette(lit));
-  }
+  s_cv.lit = size ? (int)((uint64_t)s_cv.job->video_file.pos * CONV_SEGMENTS /
+                          size)
+                  : 0;
+  s_cv.glow++;
+  palette_set(conv_palette(s_cv.lit));
   if (r <= 0) {
     conv_finish(r);
   }
 }
 
-// Back to the bench; a conversion still running is stopped first, its clip
-// file closed and left incomplete.
+// SPACE: a clip converting is stopped (its file closed, left incomplete); a
+// run shows where it got to; from the end's screen, back to the bench.
 static void conv_stop(void) {
   if (!s_cv.done && s_cv.job != NULL) {
     convjob_abort(s_cv.job);
   }
   conv_release_heap();
+  if (s_cv.all && !s_cv.done) {
+    s_cv.done = true;
+    s_cv.stopped = true;
+    palette_set(conv_palette(s_cv.lit));
+    s_dirty = true;
+    return;
+  }
   s_cv.active = false;
   palette_set(bench_palette);
   s_dirty = true;
@@ -1726,7 +2008,7 @@ static void conv_stop(void) {
 
 // --- Playing a clip file ----------------------------------------------------
 //
-// A scene clip's clip file, as C writes it (BENCH_FOLDER/<clip>.DLC), played
+// A scene clip's clip file, as C writes it (BENCH_FOLDER/STE or /ST), played
 // through clipplay.h with its sound; the card at BENCH_FAST_KHZ. The sound
 // leads: the reader pushes each record's samples into a ring the audio
 // takes as a stream (audio_set_pcm_stream()), and the samples the ST has
@@ -2027,18 +2309,17 @@ static void play_start(int index) {
   memset(&s_play, 0, sizeof(s_play));
   memset(&playResults, 0, sizeof(playResults));
   s_play.active = true;
-  char base[16];
-  snprintf(base, sizeof(base), "%s", entry.name);
-  char *dot = strchr(base, '.');
-  if (dot != NULL) {
-    *dot = '\0';
-  }
-  snprintf(s_play.path, sizeof(s_play.path), "%s/%s.DLC", BENCH_FOLDER, base);
   s_play.t0 = time_us_32();
   s_play.m = malloc(sizeof(play_mem_t));
   if (s_play.m == NULL) {
     play_finish(-100);
     return;
+  }
+  // The clip file for the machine's palette, else the other's.
+  int bits = conv_machine_bits();
+  conv_path(s_play.path, sizeof(s_play.path), bits, entry.name);
+  if (f_open(&s_play.m->f, s_play.path, FA_READ) != FR_OK) {
+    conv_path(s_play.path, sizeof(s_play.path), 7 - bits, entry.name);
   }
   if (f_open(&s_play.m->f, s_play.path, FA_READ) != FR_OK) {
     free(s_play.m);
@@ -2229,6 +2510,13 @@ static void pal_stop(void) {
   s_dirty = true;
 }
 
+// Whether the bench is in the middle of something a conversion must not
+// interrupt (the sound test it stops itself).
+static bool bench_busy(void) {
+  return s_test.running || s_test.pending || s_show.active || s_ip.active ||
+         s_cv.active || s_play.active || s_pal.active;
+}
+
 // --- Public -----------------------------------------------------------------
 
 void bench_init(void) {
@@ -2267,18 +2555,26 @@ void bench_start_sd(void) {
 
 void bench_restart(void) {
   // A conversion still running is stopped: its screen cannot be drawn again
-  // (it works in the framebuffers' memory), and the ST shows the bench live.
-  if (s_cv.active && !s_cv.done) {
-    conv_stop();
+  // (it works in the framebuffers' memory). The check below carries it on.
+  if (s_cv.active) {
+    if (!s_cv.done && s_cv.job != NULL) {
+      convjob_abort(s_cv.job);
+    }
+    conv_release_heap();
+    s_cv.active = false;
   }
   // A clip playing stops: the sound's clock starts again with the session.
-  if (s_play.active && !s_play.done) {
-    play_finish(PLAY_STOPPED);
+  if (s_play.active) {
+    if (!s_play.done) {
+      play_finish(PLAY_STOPPED);
+    }
+    s_play.active = false;
   }
-  palette_set(s_cv.active   ? conv_palette(s_cv.lit)
-              : s_show.active ? show_palette()
-                              : bench_palette);
+  palette_set(s_show.active ? show_palette() : bench_palette);
   s_dirty = true;
+  // Every start checks the game's clips for this machine: those missing are
+  // converted; when all are there the bench (the game, later) goes on.
+  conv_all_start(true);
 }
 
 void bench_stop_card_work(void) {
@@ -2439,8 +2735,8 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     case 0x1E:  // A: the first scene clip's sound, played
       sound_start(0, true);
       break;
-    case 0x2E:  // C: the first scene clip converted into a clip file
-      conv_start(0, 0);
+    case 0x2E:  // C: the whole game converted, the clips ready passed over
+      conv_all_start(false);
       break;
     case 0x2F:  // V: the first scene clip's clip file played
       play_start(0);
@@ -2532,6 +2828,9 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
       return 1;
     case DEVHOOKS_APP_WRITE_TEST:
       write_start(payload_size >= 2u ? payload[0] * 512u : 0u);
+      return 1;
+    case DEVHOOKS_APP_CONVERT_ALL:
+      conv_all_start(false);
       return 1;
     case DEVHOOKS_APP_PLAY:
       if (payload_size >= 2u) {

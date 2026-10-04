@@ -7,9 +7,10 @@ Pico (RP2040) in the cartridge reads the game's clips from the SD card, turns ea
 the sound plays through the DMA sound chip on an STE or a Mega STE, through the YM2149 elsewhere.
 
 **This is work in progress, and it is not the game yet.** The current firmware is a bench: it
-finds the CD-ROM image on the card, lists it, measures how fast the card reads, decodes a clip's
-pictures and sound on the cartridge and shows or plays them. The next versions convert the clips
-once into a format of the app's own on the card, then play them and the game.
+finds the CD-ROM image on the card and converts the game's clips once into a format of the app's
+own on the card, for the machine it is plugged into. Then it lists the image, measures how fast
+the card reads, decodes a clip's pictures and sound on the cartridge and shows or plays them, and
+plays the converted clips. The next versions play the game.
 
 ## What you need
 
@@ -21,9 +22,19 @@ once into a format of the app's own on the card, then play them and the game.
 - An Atari ST, STE, Mega ST or Mega STE with a colour monitor (low or medium resolution). In
   high resolution the app returns to GEM with a message.
 
+## The first start: the game converted
+
+At every start the app checks the converted clips on the card for the machine plugged in:
+`/DLAIR/STE` for an STE or a Mega STE (4,096 colours), `/DLAIR/ST` for an ST or a Mega ST (512
+colours). It converts those that are missing or were made by an older version. The first time that
+is the whole game: 56 minutes on a Mega STE, 535 MB on the card (546 MB for an ST), so the card
+needs that much free space. The screen shows the clip being converted, the whole game's progress
+and the time left, and the ST can be left alone. Space stops it, and the next start carries on
+where it stopped. When every clip is there, the bench comes up at once.
+
 ## The bench
 
-After the ST boots, the screen shows the card, the folder, the machine and TOS the ST reported,
+After the ST boots and the clips are ready, the screen shows the card, the folder, the machine and TOS the ST reported,
 the image (its size, its fragments on the card, its volume), its root directory and the scene
 clips in it. The keys:
 
@@ -34,8 +45,8 @@ clips in it. The keys:
 | I | the intra pictures of the first scene clip, converted and shown (Left / Right: another clip; T: the timings; C: 512 or 4,096 colours; D: the dither; W: the palette's weighting; Space: back) |
 | P | the first scene clip's I and P pictures decoded in place on the cartridge, timed and checked by CRC-32 (Space: back) |
 | A | the first scene clip's sound, decoded and played (+ / -: the volume in 3 dB steps; Left / Right: another clip; Space: stop) |
-| C | the first scene clip converted into the app's clip file in the folder, for the machine plugged in; the bar fills as it goes, then the times (Space: stop, or back) |
-| V | the first scene clip's clip file (made by C) played with its sound (U / D: the volume, -18 to +18 dB, saved for each sound output); then the pictures shown and dropped and the times (Space: stop, or back) |
+| C | the game's clips checked and those not there converted, as at every start (Space: stop, or back) |
+| V | the first scene clip's converted file played with its sound (U / D: the volume, -18 to +18 dB, saved for each sound output); then the pictures shown and dropped and the times (Space: stop, or back) |
 | T / Y | the palette test: two pictures with palettes of their own, sent with the frame (T: only red and green show) or before it, the old way (Y: blue and white flashes); Space: back |
 | X | back to Booster, the Multi-device's menu (the ST resets into it) |
 | Esc | back to GEM |
