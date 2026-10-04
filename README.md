@@ -35,6 +35,7 @@ clips in it. The keys:
 | P | the first scene clip's I and P pictures decoded in place on the cartridge, timed and checked by CRC-32 (Space: back) |
 | A | the first scene clip's sound, decoded and played (+ / -: the volume in 3 dB steps; Left / Right: another clip; Space: stop) |
 | C | the first scene clip converted into the app's clip file in the folder, for the machine plugged in; the bar fills as it goes, then the times (Space: stop, or back) |
+| V | the first scene clip's clip file (made by C) played, no sound yet; then the times of reading, decoding and publishing (Space: stop, or back) |
 | T / Y | the palette test: two pictures with palettes of their own, sent with the frame (T: only red and green show) or before it, the old way (Y: blue and white flashes); Space: back |
 | X | back to Booster, the Multi-device's menu (the ST resets into it) |
 | Esc | back to GEM |

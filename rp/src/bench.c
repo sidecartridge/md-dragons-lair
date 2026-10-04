@@ -22,6 +22,7 @@
 #include "cart_shared.h"
 #include "constants.h"
 #include "audio.h"
+#include "clipplay.h"
 #include "convjob.h"
 #include "fb_blit.h"
 #include "iso9660.h"
@@ -1722,6 +1723,237 @@ static void conv_stop(void) {
   s_dirty = true;
 }
 
+// --- Playing a clip file ----------------------------------------------------
+//
+// A scene clip's clip file, as C writes it (BENCH_FOLDER/<clip>.DLC), played
+// through clipplay.h: each picture decoded into fb_chunked_buffer and
+// published with its palette (palette_set_frame()), a frame due every
+// PLAY_FRAME_US from the first, a held frame costing nothing; the card at
+// BENCH_FAST_KHZ. No sound yet. The time each frame takes to read and
+// decode, and each picture to publish, on the screen at the end and in
+// playResults over SWD.
+
+#define PLAY_FRAME_US 40000u
+#define PLAY_STOPPED 1  // a result: SPACE stopped it
+
+typedef struct {
+  FIL f;
+  clipplay_t p;
+  uint8_t buf[CLIPPLAY_BUFFER_BYTES];
+} play_mem_t;
+
+static struct {
+  bool active;
+  bool done;
+  char path[32];
+  play_mem_t *m;  // on the heap while it plays
+  uint32_t t0;
+  uint32_t read_us;  // of the frame being read
+  uint64_t sum[3];
+} s_play;
+
+// The last clip played, readable over SWD as well as on the screen. Times
+// in microseconds: minimum, mean and maximum, a frame (reading, decoding)
+// or a picture (publishing).
+typedef struct {
+  int result;  // 0: to the end, PLAY_STOPPED, or negative: an error
+  uint32_t frames;
+  uint32_t pictures;
+  uint32_t late;  // frames begun more than a frame after they were due
+  uint32_t pieces;
+  uint32_t read_us[3];
+  uint32_t decode_us[3];
+  uint32_t publish_us[3];
+  uint32_t total_ms;
+} play_results_t;
+
+__attribute__((used)) play_results_t playResults;
+
+static int play_read(void *ctx, uint8_t *buf, uint32_t len) {
+  UINT got = 0;
+  uint32_t t0 = time_us_32();
+  FRESULT fr = f_read((FIL *)ctx, buf, len, &got);
+  s_play.read_us += time_us_32() - t0;
+  return fr == FR_OK ? (int)got : -1;
+}
+
+static int play_seek(void *ctx, uint32_t offset) {
+  return f_lseek((FIL *)ctx, offset) == FR_OK ? 0 : -1;
+}
+
+static void play_stat(uint32_t stat[3], uint64_t *sum, uint32_t count,
+                      uint32_t us) {
+  if (count == 1 || us < stat[0]) {
+    stat[0] = us;
+  }
+  if (us > stat[2]) {
+    stat[2] = us;
+  }
+  *sum += us;
+  stat[1] = (uint32_t)(*sum / count);
+}
+
+static void play_draw(void) {
+  fb_chunked_clear(C_BACK);
+  font_set_font(&font8x8);
+  text(0, 0, C_TITLE, "PLAYING A CLIP FILE");
+  rule(1);
+  textf(0, 3, C_TEXT, "FILE    %s", s_play.path);
+  const play_results_t *r = &playResults;
+  if (r->result < 0) {
+    textf(0, 5, C_BAD, "STOPPED: %d", r->result);
+  } else {
+    textf(0, 5, r->result == 0 ? C_GOOD : C_TEXT, "%s %lu FRAMES, %lu PICTURES",
+          r->result == 0 ? "DONE   " : "STOPPED", (unsigned long)r->frames,
+          (unsigned long)r->pictures);
+  }
+  textf(0, 6, C_TEXT, "        %lu LATE, %lu PIECES, %lu.%lu S",
+        (unsigned long)r->late, (unsigned long)r->pieces,
+        (unsigned long)(r->total_ms / 1000u),
+        (unsigned long)(r->total_ms / 100u % 10u));
+  text(0, 8, C_DIM, "MS          MIN    MEAN     MAX");
+  static const char *const names[3] = {"READ    ", "DECODE  ", "PUBLISH "};
+  const uint32_t *stats[3] = {r->read_us, r->decode_us, r->publish_us};
+  for (int i = 0; i < 3; i++) {
+    const uint32_t *v = stats[i];
+    textf(0, 9 + i, C_VALUE, "%s %3lu.%02lu %3lu.%02lu %3lu.%02lu", names[i],
+          (unsigned long)(v[0] / 1000u), (unsigned long)(v[0] / 10u % 100u),
+          (unsigned long)(v[1] / 1000u), (unsigned long)(v[1] / 10u % 100u),
+          (unsigned long)(v[2] / 1000u), (unsigned long)(v[2] / 10u % 100u));
+  }
+  text(0, 24, C_DIM, "SPACE: BACK");
+}
+
+static void play_finish(int result) {
+  playResults.result = result;
+  playResults.total_ms = (time_us_32() - s_play.t0) / 1000u;
+  if (s_play.m != NULL) {
+    playResults.pieces = s_play.m->p.pieces;
+    f_close(&s_play.m->f);
+    free(s_play.m);
+    s_play.m = NULL;
+  }
+  bench_set_spi_hz(s_configured_hz);
+  s_play.done = true;
+  palette_set(bench_palette);
+  s_dirty = true;
+  DPRINTF("Play %s: result %d, %lu frames, %lu pictures, %lu late; read "
+          "%lu/%lu/%lu us, decode %lu/%lu/%lu, publish %lu/%lu/%lu\n",
+          s_play.path, result, (unsigned long)playResults.frames,
+          (unsigned long)playResults.pictures,
+          (unsigned long)playResults.late,
+          (unsigned long)playResults.read_us[0],
+          (unsigned long)playResults.read_us[1],
+          (unsigned long)playResults.read_us[2],
+          (unsigned long)playResults.decode_us[0],
+          (unsigned long)playResults.decode_us[1],
+          (unsigned long)playResults.decode_us[2],
+          (unsigned long)playResults.publish_us[0],
+          (unsigned long)playResults.publish_us[1],
+          (unsigned long)playResults.publish_us[2]);
+}
+
+static void play_start(int index) {
+  if (!benchResults.sd_ok || s_test.running || s_test.pending ||
+      s_show.active || s_ip.active || s_cv.active || s_play.active) {
+    return;
+  }
+  if (s_sound.active) {
+    sound_stop();
+  }
+  iso9660_entry_t entry;
+  if (!benchResults.image_found ||
+      !show_find_clip(index < 0 ? 0 : index, &entry)) {
+    return;
+  }
+  memset(&s_play, 0, sizeof(s_play));
+  memset(&playResults, 0, sizeof(playResults));
+  s_play.active = true;
+  char base[16];
+  snprintf(base, sizeof(base), "%s", entry.name);
+  char *dot = strchr(base, '.');
+  if (dot != NULL) {
+    *dot = '\0';
+  }
+  snprintf(s_play.path, sizeof(s_play.path), "%s/%s.DLC", BENCH_FOLDER, base);
+  s_play.t0 = time_us_32();
+  s_play.m = malloc(sizeof(play_mem_t));
+  if (s_play.m == NULL) {
+    play_finish(-100);
+    return;
+  }
+  if (f_open(&s_play.m->f, s_play.path, FA_READ) != FR_OK) {
+    free(s_play.m);
+    s_play.m = NULL;
+    play_finish(CLIPPLAY_ERR_IO);
+    return;
+  }
+  bench_set_spi_hz(BENCH_FAST_KHZ * 1000u);
+  clipplay_io_t io = {play_read, play_seek, &s_play.m->f};
+  int r = clipplay_open(&s_play.m->p, &io, s_play.m->buf);
+  if (r < 0) {
+    play_finish(r);
+    return;
+  }
+  DPRINTF("Play %s: %lu frames\n", s_play.path,
+          (unsigned long)s_play.m->p.header.frames);
+  s_play.t0 = time_us_32();
+}
+
+// One frame a call, when it is due: the main loop runs between them.
+static void play_frame(void) {
+  if (s_play.done) {
+    if (s_dirty) {
+      play_draw();
+      s_dirty = false;
+    }
+    fb_publish();
+    return;
+  }
+  play_results_t *r = &playResults;
+  uint32_t due = s_play.t0 + r->frames * PLAY_FRAME_US;
+  int32_t early = (int32_t)(due - time_us_32());
+  if (early > 0) {
+    return;
+  }
+  if (-early > (int32_t)PLAY_FRAME_US) {
+    r->late++;
+  }
+  s_play.read_us = 0;
+  uint32_t t0 = time_us_32();
+  clipplay_frame_t f;
+  int got = clipplay_next(&s_play.m->p, fb_chunked_buffer, &f);
+  uint32_t us = time_us_32() - t0;
+  if (got <= 0) {
+    play_finish(got);
+    return;
+  }
+  r->frames++;
+  play_stat(r->read_us, &s_play.sum[0], r->frames, s_play.read_us);
+  play_stat(r->decode_us, &s_play.sum[1], r->frames, us - s_play.read_us);
+  if (f.kind != CLIP_HELD) {
+    uint16_t words[16];
+    for (int e = 0; e < 16; e++) {
+      words[e] = picture16_ste_word(f.palette[e]);
+    }
+    palette_set_frame(words);
+    t0 = time_us_32();
+    fb_publish();
+    r->pictures++;
+    play_stat(r->publish_us, &s_play.sum[2], r->pictures, time_us_32() - t0);
+  }
+}
+
+static void play_stop(void) {
+  if (!s_play.done) {
+    play_finish(PLAY_STOPPED);  // to its screen
+    return;
+  }
+  s_play.active = false;
+  palette_set(bench_palette);
+  s_dirty = true;
+}
+
 // --- The palette test -------------------------------------------------------
 //
 // Two full-screen pictures, each with a palette of its own, the other one
@@ -1856,6 +2088,12 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     }
     return;
   }
+  if (s_play.active) {
+    if (key->scancode == 0x39) {  // space: stop, or back to the bench
+      play_stop();
+    }
+    return;
+  }
   if (s_sound.active && s_sound.play) {
     switch (key->scancode) {
       case 0x0D:  // = / +: 3 dB more
@@ -1960,6 +2198,9 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     case 0x2E:  // C: the first scene clip converted into a clip file
       conv_start(0, 0);
       break;
+    case 0x2F:  // V: the first scene clip's clip file played
+      play_start(0);
+      break;
     case 0x14:  // T: the palette test, palettes with their frames
       pal_start(true);
       break;
@@ -1996,6 +2237,10 @@ void bench_frame(void) {
   }
   if (s_pal.active) {
     pal_frame();
+    return;
+  }
+  if (s_play.active) {
+    play_frame();
     return;
   }
   if (s_sound.active) {
@@ -2043,6 +2288,13 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
       return 1;
     case DEVHOOKS_APP_WRITE_TEST:
       write_start(payload_size >= 2u ? payload[0] * 512u : 0u);
+      return 1;
+    case DEVHOOKS_APP_PLAY:
+      if (payload_size >= 2u) {
+        play_start((int)payload[0]);
+      } else if (s_play.active) {
+        play_stop();
+      }
       return 1;
     case DEVHOOKS_APP_CONVERT:
       if (payload_size >= 2u) {
