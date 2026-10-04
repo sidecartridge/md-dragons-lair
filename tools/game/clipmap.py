@@ -12,11 +12,13 @@ ones are matched scene by scene by their clips' lengths (a scene's main clip
 and its others: deaths, the last part). This script places every sequence
 that seeks in a clip, at a frame of the clip file (25 a second).
 
-  python3 tools/game/clipmap.py GAME_JSON SEGMENTS_JSON CLIPS_DIR
+  python3 tools/game/clipmap.py GAME_JSON SEGMENTS_JSON CLIPS
 
-CLIPS_DIR holds a set of clip files (*.DLC: their frames come from their
-headers). It prints the segments' clips, then every sequence's place, and
-what it could not place.
+CLIPS is a set's folder of clip files (*.DLC: their frames come from their
+headers), or tools/game/clip_frames.json, their lengths alone; with a folder
+and --save, the lengths are written there. It prints the segments' clips,
+then every sequence's place, and what it could not place. build() is the
+same for tools/game/gen_game_table.py.
 """
 
 import glob
@@ -29,14 +31,19 @@ import sys
 LASERDISC_FPS = 23.976
 CONTENT_START_MS = 6297.0  # DirkSimple: the disc's content starts here
 CLIP_FPS = 25
-START_SLACK = 3     # laserdisc frames: a start this early is the next segment's
+START_SLACK = 5     # laserdisc frames: a start this early is the next segment's
 OVERRUN_SLACK = 2   # clip frames: the last picture held, not the next clip
 MATCH_MS = 350      # a clip and a segment this close in length are the same
 
 
-def clip_frames(clips_dir):
+def clip_frames(clips):
+    """Each clip's frames at 25 a second: from a set's clip files, or from a
+    JSON of them."""
+    if clips.endswith(".json"):
+        with open(clips) as f:
+            return json.load(f)
     frames = {}
-    for path in glob.glob(os.path.join(clips_dir, "*.DLC")):
+    for path in glob.glob(os.path.join(clips, "*.DLC")):
         with open(path, "rb") as f:
             header = f.read(64)
         frames[os.path.basename(path)[:-4]] = struct.unpack_from("<I", header, 8)[0]
@@ -99,19 +106,19 @@ def scene_cost(seg_members, clip_members, seg_ms, clip_ms):
     return cost + abs(sum(rest_s) - sum(rest_c))
 
 
-def main():
-    game = json.load(open(sys.argv[1]))
-    segments = json.load(open(sys.argv[2]))["segments"]
-    frames = clip_frames(sys.argv[3])
+def build(game, segments, frames):
+    """The segments' clips, and every sequence that seeks placed: a dict of
+    (scene, sequence) to {clip, frame, then, over, segment, ld}, and the list
+    of those not placed."""
     clip_ms = {c: n * 1000.0 / CLIP_FPS for c, n in frames.items()}
 
-    # Every segment (by its place on the disc: one name can be there twice).
+    # Every segment (by its first place on the disc: one name can be there
+    # twice).
     seg_ms = {}
     for s in segments:
         name = s["filename"].split(".")[0]
-        seg_ms.setdefault(name, s["frame"])
-    seg_ms = {name: (name, frame, next(s["duration_ms"] for s in segments if s["filename"].startswith(name + ".")))
-              for name, frame in seg_ms.items()}
+        if name not in seg_ms:
+            seg_ms[name] = (name, s["frame"], s["duration_ms"])
 
     sg = groups(seg_ms, r"dls(\d\d)(.*)")
     cg = groups(frames, r"S(\d\d)(.*)")
@@ -129,17 +136,6 @@ def main():
         cmembers = [(k.lower(), c) for k, c in cg[b]]
         seg_clip.update(match_members(members, cmembers, seg_ms, clip_ms))
 
-    print("Segments and their clips:")
-    for s in segments:
-        name = s["filename"].split(".")[0]
-        clip, at = seg_clip.get(name, (None, 0))
-        if clip:
-            print("  %-9s frame %6d %8.1f ms  -> %-7s %8.1f ms%s" % (
-                name, s["frame"], s["duration_ms"], clip, clip_ms[clip],
-                "  (from %.0f ms)" % at if at else ""))
-        else:
-            print("  %-9s frame %6d %8.1f ms  -> none" % (name, s["frame"], s["duration_ms"]))
-
     # Every sequence that seeks: in the segment that starts latest at or just
     # after its start (DirkSimple's starts can be a few frames before a
     # segment, and segments overlap by a few frames); a sequence longer than
@@ -147,7 +143,7 @@ def main():
     # the disc, as the laserdisc does.
     spans = sorted((s["frame"], s["frame"] + s["duration_ms"] * LASERDISC_FPS / 1000.0,
                     s["filename"].split(".")[0]) for s in segments)
-    placed, missing = [], []
+    placed, missing = {}, []
     for scene, seqs in sorted(game["scenes"].items()):
         for seq, d in sorted(seqs.items()):
             t = d.get("start_time", -1)
@@ -168,16 +164,46 @@ def main():
             if need > frames[clip] + OVERRUN_SLACK:
                 after = [sp for sp in spans if sp[0] >= end - START_SLACK and sp[2] != seg]
                 then = seg_clip.get(after[0][2], (None, 0))[0] if after else None
-            placed.append((scene, seq, ld, seg, clip, frame, when, need - frames[clip], then))
+            placed[(scene, seq)] = {"clip": clip, "frame": frame, "then": then,
+                                    "over": need - frames[clip], "segment": seg, "ld": ld,
+                                    "when": when}
+    return segments_report(segments, seg_clip, clip_ms), placed, missing
+
+
+def segments_report(segments, seg_clip, clip_ms):
+    lines = []
+    for s in segments:
+        name = s["filename"].split(".")[0]
+        clip, at = seg_clip.get(name, (None, 0))
+        if clip:
+            lines.append("  %-9s frame %6d %8.1f ms  -> %-7s %8.1f ms%s" % (
+                name, s["frame"], s["duration_ms"], clip, clip_ms[clip],
+                "  (from %.0f ms)" % at if at else ""))
+        else:
+            lines.append("  %-9s frame %6d %8.1f ms  -> none" % (name, s["frame"], s["duration_ms"]))
+    return lines
+
+
+def main():
+    game = json.load(open(sys.argv[1]))
+    segments = json.load(open(sys.argv[2]))["segments"]
+    frames = clip_frames(sys.argv[3])
+    if "--save" in sys.argv[4:]:
+        with open(os.path.join(os.path.dirname(__file__), "clip_frames.json"), "w") as f:
+            json.dump(dict(sorted(frames.items())), f, indent=1)
+            f.write("\n")
+    report, placed, missing = build(game, segments, frames)
+    print("Segments and their clips:")
+    print("\n".join(report))
     print("\nSequences placed: %d; not placed: %d" % (len(placed), len(missing)))
-    for scene, seq, ld, seg, clip, frame, when, over, then in placed:
+    for (scene, seq), p in sorted(placed.items()):
         note = ""
-        if then:
-            note = "  then %s (%d frames into it)" % (then, over)
-        elif over > OVERRUN_SLACK:
-            note = "  RUNS PAST THE CLIP BY %d FRAMES" % over
+        if p["then"]:
+            note = "  then %s (%d frames into it)" % (p["then"], p["over"])
+        elif p["over"] > OVERRUN_SLACK:
+            note = "  RUNS PAST THE CLIP BY %d FRAMES" % p["over"]
         print("  %-30s %-26s ld %8.1f  %-9s -> %-7s frame %5d  for %6.0f ms%s" % (
-            scene, seq, ld, seg, clip, frame, when, note))
+            scene, seq, p["ld"], p["segment"], p["clip"], p["frame"], p["when"], note))
     for scene, seq, ld in missing:
         print("  NOT PLACED %-30s %-26s ld %8.1f" % (scene, seq, ld))
 
