@@ -43,8 +43,12 @@
                                    // folder, then deleted)
 #define DEVHOOKS_APP_CONVERT_ALL 9  // the whole game for the machine
                                     // plugged in (as C)
-#define DEVHOOKS_APP_PLAY 8        // WORD N: scene clip N's clip file
-                                   // played; no word: stopped, then back
+#define DEVHOOKS_APP_PLAY 8        // WORD N [WORD 3|4 [WORD F]]: scene
+                                   // clip N's clip file played (the ST or
+                                   // the STE set; from frame F); no word:
+                                   // stopped (a soak run too), then back
+#define DEVHOOKS_APP_SOAK 10       // [WORD N [WORD 3|4]]: every clip from
+                                   // N to the last, one after the other
 #define DEVHOOKS_APP_CONVERT 7     // WORD N [WORD 3|4]: scene clip N
                                    // converted into BENCH_FOLDER/STE or
                                    // /ST, <clip>.DLC

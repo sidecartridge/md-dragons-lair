@@ -46,7 +46,7 @@ clips in it. The keys:
 | P | the first scene clip's I and P pictures decoded in place on the cartridge, timed and checked by CRC-32 (Space: back) |
 | A | the first scene clip's sound, decoded and played (+ / -: the volume in 3 dB steps; Left / Right: another clip; Space: stop) |
 | C | the game's clips checked and those not there converted, as at every start (Space: stop, or back) |
-| V | the first scene clip's converted file played with its sound (U / D: the volume, -18 to +18 dB, saved for each sound output); then the pictures shown and dropped and the times (Space: stop, or back) |
+| V | the clips: the list of the converted clips of one set (S: the other set; Return: play one; L: play every clip from there to the last, then the run's results; Space: back). While a clip plays: Space pauses it, Left / Right the previous or next clip, S the same clip in the other set at the same frame, O the frame and the times over the picture, U / D the volume (-18 to +18 dB, saved for each sound output), Q stops it and shows the pictures shown and dropped and the times |
 | T / Y | the palette test: two pictures with palettes of their own, sent with the frame (T: only red and green show) or before it, the old way (Y: blue and white flashes); Space: back |
 | X | back to Booster, the Multi-device's menu (the ST resets into it) |
 | Esc | back to GEM |
