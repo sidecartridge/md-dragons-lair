@@ -20,6 +20,11 @@
 #define APP_FOLDER "/DLAIR"
 #define ACONFIG_PARAM_MODE "MODE"
 
+// The clip player's volume in dB (3 dB steps), one for each output: the YM
+// sounds quieter at the DMA chip's level and plays only 6 bits.
+#define ACONFIG_PARAM_VOLUME_YM "VOLUME_YM"
+#define ACONFIG_PARAM_VOLUME_DMA "VOLUME_DMA"
+
 #define ACONFIG_SUCCESS 0
 #define ACONFIG_INIT_ERROR -1
 #define ACONFIG_MISMATCHED_APP -2
