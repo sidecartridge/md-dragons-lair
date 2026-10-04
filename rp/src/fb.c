@@ -212,15 +212,20 @@ void fb_set_copy_mode(uint8_t mode, uint8_t piece) {
       (uint16_t)(mode | (piece << 8));
 }
 
-void fb_publish(void) {
+static uint32_t s_transpose_us;
+
+void fb_publish_prepare(void) {
   /* 1. Transpose chunked -> planar SCRATCH (RP RAM, dual-core). This is
    *    the slow part (~1 ms) but it does NOT touch the cart FB, so it
    *    runs unsynchronized and overlaps the m68k's blit of the previous
-   *    frame. */
+   *    frame. The frame's palette is taken now, written with the frame. */
   uint32_t t0 = time_us_32();
   fb_transpose();
-  uint32_t transpose_us = time_us_32() - t0;
+  s_transpose_us = time_us_32() - t0;
+  palette_prepare_frame();
+}
 
+void fb_publish_commit(void) {
   /* 2. Block until the m68k has finished blitting the previous frame
    *    (its VBLSYNC ack) so the cart FB is free to overwrite. Drain the
    *    ROM3 ring meanwhile so IKBD / ESC stay live; the timeout is a
@@ -241,7 +246,7 @@ void fb_publish(void) {
    *    Mark the frame ready as the last write (barrier first). */
   uint32_t t1 = time_us_32();
   fb_planar_publish((uint16_t *)fb_screen.framebuffer);
-  last_convert_us = transpose_us + (time_us_32() - t1);
+  last_convert_us = s_transpose_us + (time_us_32() - t1);
 
   /* The frame's palette with it (palette.h), before the counter: the ST
    * takes both when it takes the frame. */
@@ -250,6 +255,11 @@ void fb_publish(void) {
   fb_frame_tick++;
   __sync_synchronize();
   *fb_frame_counter = fb_frame_tick;
+}
+
+void fb_publish(void) {
+  fb_publish_prepare();
+  fb_publish_commit();
 }
 
 uint32_t fb_last_convert_us(void) { return last_convert_us; }

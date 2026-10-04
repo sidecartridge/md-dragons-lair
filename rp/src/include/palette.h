@@ -64,11 +64,15 @@ void palette_set(const uint16_t entries[PALETTE_ENTRIES]);
 /* Overwrite a single entry of the palette now. */
 void palette_set_entry(uint8_t idx, uint16_t color);
 
-/* The palette of the next frame published (fb_publish()) only: on screen
- * when that frame is. Frames after it take the palette now again. */
+/* The palette of the next frame published (fb_publish(), or the next
+ * fb_publish_prepare()) only: on screen when that frame is. Frames after it
+ * take the palette now again. */
 void palette_set_frame(const uint16_t entries[PALETTE_ENTRIES]);
 
-/* For fb_publish(), with the frame: the frame's palette into the cart. */
+/* For fb_publish_prepare(): the frame's palette taken (palette_set_frame()'s,
+ * else the palette now). For fb_publish_commit(), with the frame: the taken
+ * palette into the cart. */
+void palette_prepare_frame(void);
 void palette_write_frame(void);
 
 #ifdef __cplusplus

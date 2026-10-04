@@ -129,6 +129,7 @@ static uint32_t s_hellos_seen;
 /* The app's source: YM pairs at AUDIO_YM_SOURCE_RATE_HZ, or PCM at a rate. */
 static audio_fill_cb_t s_fill_cb;
 static audio_pcm_cb_t s_pcm_cb;
+static audio_pcm_avail_t s_pcm_avail; /* a stream: what s_pcm_cb can give */
 static uint32_t s_pcm_rate;
 
 /* The output's FIFO: whole VBLs of pairs for the YM, samples for the DMA
@@ -156,6 +157,17 @@ static uint8_t s_hold[2];    /* the last sample written: what an underrun holds 
 static bool s_dma_known;
 static uint32_t s_dma_front; /* the next offset of the ring the RP writes */
 static int8_t s_dma_hold;
+static volatile uint32_t s_dma_play; /* where the chip played at the last report */
+
+/* For audio_source_played(): the FIFO index (YM slices, DMA samples) where
+ * the current source's first output sample went, and what the writers
+ * wrote where: for each of the ST's slices, the FIFO slice written into it
+ * (x 2, + 1 when it held the last sample); for each AUDIO_PLAYED_UNIT bytes
+ * of the DMA ring, the FIFO sample written at its start. */
+#define AUDIO_PLAYED_UNIT 64u
+static uint32_t s_src_base;
+static volatile uint32_t s_slice_fifo[CART_AUDIO_SLICES];
+static volatile uint32_t s_unit_fifo[CART_AUDIO_DMA_RING_BYTES / AUDIO_PLAYED_UNIT];
 
 static repeating_timer_t s_writer_timer;
 
@@ -320,6 +332,24 @@ static uint32_t rate_step(uint32_t out_rate) {
   return (uint32_t)(((uint64_t)source_rate() << 16) / out_rate);
 }
 
+/* Whether a stream can give the source samples `n` output samples take at
+ * `step` (any other source always can): what the resampler will read,
+ * beyond what is staged, in the callback's whole chunks. */
+static bool stream_has(uint32_t n, uint32_t step) {
+  if (s_pcm_avail == NULL || s_pcm_cb == NULL) {
+    return true;
+  }
+  uint32_t need = s_rs_primed
+                      ? (uint32_t)(((uint64_t)s_rs_pos + (uint64_t)n * step) >> 16)
+                      : (uint32_t)(((uint64_t)n * step) >> 16) + 2u;
+  uint32_t staged = AUDIO_PCM_CHUNK - s_pcm_stage_pos;
+  if (need <= staged) {
+    return true;
+  }
+  uint32_t chunks = (need - staged + AUDIO_PCM_CHUNK - 1u) / AUDIO_PCM_CHUNK;
+  return s_pcm_avail() >= chunks * AUDIO_PCM_CHUNK;
+}
+
 /* One VBL of YM pairs. A YM source at the output's rate goes through as it
  * is. */
 static void produce_ym(uint8_t *dst) {
@@ -358,6 +388,11 @@ static void select_output(uint8_t machine) {
   __dmb();
   s_fifo_head = s_fifo_tail = 0;
   s_dma_head = s_dma_tail = 0;
+  s_src_base = 0;
+  for (uint32_t i = 0; i < CART_AUDIO_SLICES; i++) s_slice_fifo[i] = 1u;  /* held */
+  for (uint32_t i = 0; i < CART_AUDIO_DMA_RING_BYTES / AUDIO_PLAYED_UNIT; i++) {
+    s_unit_fifo[i] = 0;
+  }
   s_st_known = false;
   s_dma_known = false;
   s_hold[0] = s_hold[1] = 0;
@@ -408,17 +443,31 @@ bool audio_uses_dma(void) { return s_out == AUDIO_OUT_DMA; }
 
 /* --- Sources ----------------------------------------------------------------- */
 
+/* A new source: its output samples start at the FIFO's head. */
+static void source_base(void) {
+  s_src_base = (s_out == AUDIO_OUT_DMA) ? s_dma_head : s_fifo_head;
+}
+
 void audio_set_fill_callback(audio_fill_cb_t cb) {
   s_pcm_cb = NULL;
+  s_pcm_avail = NULL;
   s_fill_cb = cb;
   source_restart();
+  source_base();
 }
 
 void audio_set_pcm_callback(audio_pcm_cb_t cb, uint32_t rate_hz) {
+  audio_set_pcm_stream(cb, NULL, rate_hz);
+}
+
+void audio_set_pcm_stream(audio_pcm_cb_t cb, audio_pcm_avail_t avail,
+                          uint32_t rate_hz) {
   s_fill_cb = NULL;
   s_pcm_rate = rate_hz != 0u ? rate_hz : PROFILE_DMA_RATE_HZ;
   s_pcm_cb = cb;
+  s_pcm_avail = avail;
   source_restart();
+  source_base();
 }
 
 static void audio_loop_cb(uint8_t *buf, uint32_t bytes) {
@@ -560,6 +609,7 @@ static void __not_in_flash_func(audio_write_slice)(uint32_t vbl) {
       s_audio_buf + (vbl % CART_AUDIO_SLICES) * CART_AUDIO_SLICE_BYTES;
   uint32_t filled = 0;
   uint32_t tail = s_fifo_tail;
+  s_slice_fifo[vbl % CART_AUDIO_SLICES] = tail * 2u + (tail == s_fifo_head);
   if (tail != s_fifo_head) {
     const uint8_t *src = s_fifo[tail % AUDIO_FIFO_SLICES];
     memcpy(slice, src, AUDIO_FILL_BYTES_PER_VBL);
@@ -649,6 +699,7 @@ static void __not_in_flash_func(dma_writer)(void) {
     return;
   }
   uint32_t play = (report & 0xFFu) * CART_AUDIO_DMA_POS_UNIT;
+  s_dma_play = play;
   if (!s_dma_known) {
     s_dma_known = true;
     s_dma_front = (play + PROFILE_DMA_LEAD) & AUDIO_DMA_RING_MASK;
@@ -672,6 +723,9 @@ static void __not_in_flash_func(dma_writer)(void) {
   uint32_t tail = s_dma_tail;
   uint32_t head = s_dma_head;
   for (uint32_t i = 0; i < n; i++) {
+    if ((front & (AUDIO_PLAYED_UNIT - 1u)) == 0u) {
+      s_unit_fifo[front / AUDIO_PLAYED_UNIT] = tail;
+    }
     if (tail != head) {
       s_dma_hold = s_dma_fifo[tail % AUDIO_DMA_FIFO_BYTES];
       tail++;
@@ -713,8 +767,9 @@ void audio_render_frame(void) {
   }
   if (s_out == AUDIO_OUT_DMA) {
     /* Top up the FIFO a chunk at a time: the writer reads only the samples
-     * below s_dma_head. */
-    while (AUDIO_DMA_FIFO_BYTES - (s_dma_head - s_dma_tail) >= AUDIO_PCM_CHUNK) {
+     * below s_dma_head. A stream gives what it has. */
+    while (AUDIO_DMA_FIFO_BYTES - (s_dma_head - s_dma_tail) >= AUDIO_PCM_CHUNK &&
+           stream_has(AUDIO_PCM_CHUNK, rate_step(PROFILE_DMA_RATE_HZ))) {
       int8_t chunk[AUDIO_PCM_CHUNK];
       produce_pcm(chunk, AUDIO_PCM_CHUNK);
       uint32_t head = s_dma_head;
@@ -727,9 +782,52 @@ void audio_render_frame(void) {
     return;
   }
   /* Top up the FIFO: the writer reads only the slices below s_fifo_head. */
-  while (s_fifo_head - s_fifo_tail < AUDIO_FIFO_SLICES) {
+  while (s_fifo_head - s_fifo_tail < AUDIO_FIFO_SLICES &&
+         stream_has(AUDIO_FILL_SAMPLES_PER_VBL,
+                    rate_step(AUDIO_NATIVE_RATE_HZ))) {
     produce_ym(s_fifo[s_fifo_head % AUDIO_FIFO_SLICES]);
     __dmb();
     s_fifo_head = s_fifo_head + 1u;
   }
+}
+
+uint32_t audio_source_played(void) {
+  if (!source_set()) {
+    return 0;
+  }
+  uint32_t out;   /* the source's output samples played */
+  uint32_t step;
+  uint32_t since_us = time_us_32() - s_last_report_us;
+  if (s_out == AUDIO_OUT_DMA) {
+    if (!s_dma_known) {
+      return 0;
+    }
+    if (since_us > AUDIO_DMA_EST_MAX_US) since_us = AUDIO_DMA_EST_MAX_US;
+    uint32_t at = (s_dma_play + since_us * PROFILE_DMA_RATE_HZ / 1000000u) &
+                  AUDIO_DMA_RING_MASK;
+    int32_t played = (int32_t)(s_unit_fifo[at / AUDIO_PLAYED_UNIT] +
+                               at % AUDIO_PLAYED_UNIT - s_src_base);
+    out = played > 0 ? (uint32_t)played : 0u;
+    step = rate_step(PROFILE_DMA_RATE_HZ);
+  } else if (s_out == AUDIO_OUT_YM) {
+    if (!s_st_known) {
+      return 0;
+    }
+    uint32_t written = s_slice_fifo[s_st_vbl % CART_AUDIO_SLICES];
+    int32_t slices = (int32_t)((written >> 1) - s_src_base);
+    if (slices < 0) {
+      return 0;
+    }
+    /* Into the slice playing, unless it holds the last sample. */
+    uint32_t into = 0;
+    if ((written & 1u) == 0u) {
+      into = since_us * AUDIO_NATIVE_RATE_HZ / 1000000u;
+      if (into > AUDIO_FILL_SAMPLES_PER_VBL) into = AUDIO_FILL_SAMPLES_PER_VBL;
+    }
+    out = (uint32_t)slices * AUDIO_FILL_SAMPLES_PER_VBL + into;
+    step = rate_step(AUDIO_NATIVE_RATE_HZ);
+  } else {
+    return 0;
+  }
+  return (uint32_t)(((uint64_t)out * step) >> 16);
 }

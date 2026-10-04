@@ -58,6 +58,7 @@ static uint16_t s_gen;
 static uint16_t s_now[PALETTE_ENTRIES];    // the palette now
 static uint16_t s_frame[PALETTE_ENTRIES];  // palette_set_frame()'s
 static bool s_frame_given;
+static uint16_t s_prepared[PALETTE_ENTRIES];  // the prepared frame's
 
 static volatile uint16_t *cart_word(uint32_t offset) {
   return (volatile uint16_t *)((uint8_t *)&__rom_in_ram_start__ + offset);
@@ -100,11 +101,14 @@ void palette_set_frame(const uint16_t entries[PALETTE_ENTRIES]) {
   s_frame_given = true;
 }
 
+void palette_prepare_frame(void) {
+  memcpy(s_prepared, s_frame_given ? s_frame : s_now, sizeof(s_prepared));
+  s_frame_given = false;
+}
+
 void palette_write_frame(void) {
   volatile uint16_t *slot = cart_word(CART_FRAME_PALETTE_OFFSET);
-  const uint16_t *p = s_frame_given ? s_frame : s_now;
   for (uint32_t i = 0; i < PALETTE_ENTRIES; i++) {
-    slot[i] = p[i];
+    slot[i] = s_prepared[i];
   }
-  s_frame_given = false;
 }
