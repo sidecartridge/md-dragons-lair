@@ -152,6 +152,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         mpeg1_video.c
         mpeg_ps.c
         palette.c
+        qrcodegen.c
         picture16.c
         picture16_asm.S
         reset.c

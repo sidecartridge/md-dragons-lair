@@ -32,7 +32,8 @@ needs that much free space. The screen shows the clip being converted, the whole
 and the time left, and the ST can be left alone. Space stops it, and the next start carries on
 where it stopped. When every clip is there, the bench comes up at once, and the set gets a list of
 its clips, `SET.DLM`. A card with a complete set and its list needs no image: the app plays the
-clips without it.
+clips without it. With neither the image nor a set, the app says what to do, with a QR code that
+opens the web page converting the image on a computer (not online yet).
 
 ## The bench
 

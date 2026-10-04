@@ -33,6 +33,7 @@
 #include "mpeg_ps.h"
 #include "palette.h"
 #include "picture16.h"
+#include "qrcodegen.h"
 #include "pico/time.h"
 #include "sdcard.h"
 #include "st_session.h"
@@ -121,8 +122,12 @@ static struct {
 static struct {
   bool checked;  // at this session's start
   bool ready;    // a complete set, of `gun_bits`
+  bool stale;    // none, but a set of an older converter is there
   int gun_bits;
 } s_set;
+
+static void need_draw(void);
+static void text2x(int x, int y, int color, const char *str);
 
 // --- SD card clock ----------------------------------------------------------
 
@@ -574,6 +579,11 @@ static void draw_machine(int row) {
 }
 
 static void bench_draw(void) {
+  if (benchResults.sd_ok && !benchResults.image_found && s_set.checked &&
+      !s_set.ready) {
+    need_draw();  // nothing to play: what to do
+    return;
+  }
   fb_chunked_clear(C_BACK);
   font_set_font(&font8x8);
   text(0, 0, C_TITLE, "DRAGON'S LAIR  SD + ISO BENCH");
@@ -1758,6 +1768,25 @@ static bool set_complete(int gun_bits, uint16_t *count) {
   return ok && crc == mh.entries_crc;
 }
 
+// Whether the set of `gun_bits` has a manifest of another converter.
+static bool set_stale(int gun_bits) {
+  char path[40];
+  manifest_path(path, sizeof(path), gun_bits);
+  FIL f;
+  if (f_open(&f, path, FA_READ) != FR_OK) {
+    return false;
+  }
+  uint8_t bytes[MANIFEST_HEADER_BYTES];
+  UINT got = 0;
+  manifest_header_t h;
+  bool stale = f_read(&f, bytes, sizeof(bytes), &got) == FR_OK &&
+               got == sizeof(bytes) && manifest_header_read(&h, bytes) == 0 &&
+               (h.converter != CONVERT_VERSION ||
+                h.keep_percent != CONVERT_KEEP_PERCENT);
+  f_close(&f);
+  return stale;
+}
+
 // At a start with no image: the machine's set, else the other's.
 static void set_check(void) {
   uint32_t t0 = time_us_32();
@@ -1765,11 +1794,14 @@ static void set_check(void) {
   uint16_t count = 0;
   s_set.checked = true;
   s_set.ready = false;
+  s_set.stale = false;
   for (int k = 0; k < 2 && !s_set.ready; k++, bits = 7 - bits) {
     if (set_complete(bits, &count)) {
       s_set.ready = true;
       s_set.gun_bits = bits;
       benchResults.clips = count;
+    } else {
+      s_set.stale |= set_stale(bits);
     }
   }
   DPRINTF("No image: %s set %s, %lu clips, %lu ms\n",
@@ -1778,6 +1810,74 @@ static void set_check(void) {
           (unsigned long)(s_set.ready ? benchResults.clips : 0u),
           (unsigned long)((time_us_32() - t0) / 1000u));
   s_dirty = true;
+}
+
+// --- No clips on the card -------------------------------------------------------
+//
+// A start that finds neither the image nor a complete set (or only a set of
+// an older converter) says what to do: copy the CD-ROM image into the
+// folder (the cartridge converts it), or convert it on a computer with the
+// web page, which the QR code opens for this converter's version and this
+// machine's set.
+
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+#define WEB_CONVERTER_URL \
+  "https://md-dragons-lair.sidecartridge.com/v" STRINGIFY(CONVERT_VERSION) "/"
+#define QR_VERSION_MAX 4  // 33 modules: a URL of up to 62 bytes at ECC M
+#define QR_MODULE_PX 3  // 123 pixels for 33 modules: the text keeps 22 columns
+#define QR_QUIET 4  // modules of white around the code
+
+static void need_draw(void) {
+  fb_chunked_clear(C_BACK);
+  font_set_font(&font8x8);
+  text2x((320 - 16 * 13) / 2, 6, C_TITLE, "DRAGON'S LAIR");
+  static const char *const missing[] = {"THE GAME'S CLIPS ARE",
+                                        "NOT ON THE CARD YET."};
+  static const char *const stale[] = {"THE CLIPS ON THE CARD",
+                                      "ARE FOR AN OLDER", "VERSION."};
+  static const char *const how[] = {
+      "EITHER COPY YOUR",   "CD-ROM IMAGE INTO",  "/DLAIR ON THE CARD:",
+      "THE CARTRIDGE TURNS", "IT INTO CLIPS IN",   "ABOUT AN HOUR.",
+      "",                   "OR SCAN THE CODE,",  "OR GO TO",
+      "MD-DRAGONS-LAIR.",   "SIDECARTRIDGE.COM,", "TO DO IT ON A",
+      "COMPUTER IN A",      "MINUTE OR TWO."};
+  int row = 4;
+  int n = s_set.stale ? 3 : 2;
+  for (int i = 0; i < n; i++) {
+    text(1, row++, C_VALUE, s_set.stale ? stale[i] : missing[i]);
+  }
+  row++;
+  for (unsigned i = 0; i < sizeof(how) / sizeof(how[0]); i++) {
+    text(1, row++, C_TEXT, how[i]);
+  }
+  text(1, 23, C_DIM, "THEN SWITCH THE ST OFF AND ON.");
+  text(0, 24, C_DIM, "X BOOSTER  ESC GEM");
+
+  // The QR code, for this machine's set, black on white.
+  char url[80];
+  snprintf(url, sizeof(url), "%s?set=%s", WEB_CONVERTER_URL,
+           conv_machine_bits() == 4 ? "ste" : "st");
+  uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_VERSION_MAX)];
+  uint8_t temp[qrcodegen_BUFFER_LEN_FOR_VERSION(QR_VERSION_MAX)];
+  if (!qrcodegen_encodeText(url, temp, qr, qrcodegen_Ecc_MEDIUM, 1,
+                            QR_VERSION_MAX, qrcodegen_Mask_AUTO, true)) {
+    return;
+  }
+  int size = qrcodegen_getSize(qr);
+  int side = (size + 2 * QR_QUIET) * QR_MODULE_PX;
+  int x0 = 316 - side;
+  int y0 = 36;
+  fb_fill_rect(x0, y0, side, side, C_TEXT);
+  for (int y = 0; y < size; y++) {
+    for (int x = 0; x < size; x++) {
+      if (qrcodegen_getModule(qr, x, y)) {
+        fb_fill_rect(x0 + (QR_QUIET + x) * QR_MODULE_PX,
+                     y0 + (QR_QUIET + y) * QR_MODULE_PX, QR_MODULE_PX,
+                     QR_MODULE_PX, C_BACK);
+      }
+    }
+  }
 }
 
 // Whether there are clips to list and play: the image's, or a set's.
@@ -3771,7 +3871,14 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
         iso9660_unmount(&s_iso);
         benchResults.image_found = false;
         benchResults.clips = 0;
+      }
+      if (!benchResults.image_found && !bench_busy()) {
         set_check();
+        if (payload_size >= 2u && payload[0] != 0) {
+          s_set.ready = false;  // as if there were no set, or a stale one
+          s_set.stale = payload[0] == 2;
+          benchResults.clips = 0;
+        }
       }
       return 1;
     case DEVHOOKS_APP_SOAK:
