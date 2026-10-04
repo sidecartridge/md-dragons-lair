@@ -326,7 +326,8 @@ static inline int nearest(const int (*pal8)[3], int n, int r, int g, int b) {
 static void palette_8bit(const picture16_palette_t *palette, int gun_bits,
                          int (*pal8)[3]) {
   for (int i = 0; i < palette->colours; i++) {
-    uint16_t c = palette->rgb444[i];
+    uint16_t c = (i == 0 && palette->rgb444[0] == 0) ? palette->dark
+                                                     : palette->rgb444[i];
     pal8[i][0] = level8((c >> 8) & 15, gun_bits);
     pal8[i][1] = level8((c >> 4) & 15, gun_bits);
     pal8[i][2] = level8(c & 15, gun_bits);
@@ -375,8 +376,8 @@ static void refine(const uint16_t *hist, int gun_bits,
     run_two(run2, refine_job, &odd, &even);
     for (int e = 0; e < n; e++) {
       uint32_t count = even.count[e] + odd.count[e];
-      if (count == 0) {
-        continue;
+      if (count == 0 || (e == 0 && palette->rgb444[0] == 0)) {
+        continue;  // no colour chose it, or the border's black (see below)
       }
       int c[3];
       for (int a = 0; a < 3; a++) {
@@ -388,13 +389,13 @@ static void refine(const uint16_t *hist, int gun_bits,
   }
 }
 
-static int median_cut(const uint16_t *hist, int gun_bits,
-                      picture16_palette_t *palette, picture16_run2_fn run2,
-                      picture16_profile_t *profile) {
+static int median_cut_n(const uint16_t *hist, int gun_bits,
+                        picture16_palette_t *palette, picture16_run2_fn run2,
+                        picture16_profile_t *profile, int max) {
   box_t boxes[MAX_COLOURS];
   boxes[0] = (box_t){{0, 0, 0}, {15, 15, 15}, 0, 0};
   int n = shrink(hist, &boxes[0]) > 0 ? 1 : 0;
-  while (n > 0 && n < MAX_COLOURS) {
+  while (n > 0 && n < max) {
     int best = -1;
     uint64_t best_error = 0;
     for (int i = 0; i < n; i++) {
@@ -444,6 +445,52 @@ static int median_cut(const uint16_t *hist, int gun_bits,
   if (profile != NULL) {
     profile->refine = since(profile, t0);
   }
+  return n;
+}
+
+// The ST's border is palette entry 0: it is pure black in every palette, so
+// that the border stays black whatever the pictures. The darkest entry
+// becomes that black when it is near-black (no gun above NEAR_BLACK_8 in
+// 8 bits: an ST's level 1 of 7, an STE's 2 of 15), as most pictures' darkest
+// is, and keeps its colour for choosing pixels (dark): its areas stay flat,
+// black instead of a pattern of black and the next colour. Otherwise the
+// picture gets one colour fewer and black. Then black moves to entry 0. The
+// refinement leaves a black entry 0 where it is.
+#define NEAR_BLACK_8 40
+
+static int median_cut(const uint16_t *hist, int gun_bits,
+                      picture16_palette_t *palette, picture16_run2_fn run2,
+                      picture16_profile_t *profile) {
+  palette->dark = 0;
+  int n = median_cut_n(hist, gun_bits, palette, run2, profile, MAX_COLOURS);
+  int pal8[MAX_COLOURS][3];
+  palette_8bit(palette, gun_bits, pal8);
+  int dark = -1;
+  int dark_luma = 0;
+  for (int e = 0; e < n; e++) {
+    int luma = 2 * pal8[e][0] + 5 * pal8[e][1] + pal8[e][2];
+    if (dark < 0 || luma < dark_luma) {
+      dark = e;
+      dark_luma = luma;
+    }
+  }
+  if (dark >= 0 && pal8[dark][0] <= NEAR_BLACK_8 &&
+      pal8[dark][1] <= NEAR_BLACK_8 && pal8[dark][2] <= NEAR_BLACK_8) {
+    palette->dark = palette->rgb444[dark];
+    palette->rgb444[dark] = 0;
+  } else {
+    palette->dark = 0;
+    if (n == MAX_COLOURS) {
+      n = median_cut_n(hist, gun_bits, palette, run2, profile,
+                       MAX_COLOURS - 1);
+    }
+    dark = n;
+    palette->rgb444[n++] = 0;
+    palette->colours = n;
+  }
+  uint16_t first = palette->rgb444[0];
+  palette->rgb444[0] = 0;
+  palette->rgb444[dark] = first;
   return n;
 }
 

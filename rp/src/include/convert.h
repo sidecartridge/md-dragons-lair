@@ -15,6 +15,9 @@
  * frames are known; a picture shown for no frame is decoded (the next one
  * needs it) but not converted.
  *
+ * Every palette's entry 0 is black (picture16.h): the ST's border colour,
+ * black whatever the pictures; it keeps slot 0 through palette stability.
+ *
  * Palette stability (keep_percent >= 0), so that what did not move costs
  * nothing from one frame to the next: a picture is dithered with the
  * palette in use before it when that palette's error on the picture is
@@ -42,7 +45,7 @@
 
 // The converter's version, in every clip it writes: a clip of another
 // version is converted again. Raise it when the converter's output changes.
-#define CONVERT_VERSION 1
+#define CONVERT_VERSION 2
 
 // The game's palette stability (keep_percent): measured on the whole game
 // against ffmpeg's recipe held to the machine's colours, and chosen by eye.

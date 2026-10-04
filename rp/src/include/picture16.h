@@ -13,6 +13,13 @@
  * the luma, so the conversion needs no picture buffer of its own: only
  * PICTURE16_WORK_BYTES of work memory, which the caller lends.
  *
+ * Entry 0 of every palette is pure black: on an ST it is also the border's
+ * colour, which stays black whatever the pictures. The picture's darkest
+ * colour becomes that black when it is near-black (as in most pictures),
+ * still chosen for the pixels of that colour (picture16_palette_t.dark): its
+ * areas turn flat black, a little deeper. Otherwise the picture gets 15
+ * colours and black.
+ *
  * Plain C, integers only, no allocation: the same bytes on the RP and on a
  * PC.
  */
@@ -32,6 +39,10 @@ typedef struct {
   // level (an STE showing that palette shows level x 2).
   uint16_t rgb444[16];
   int colours;  // entries in use (the rest black)
+  // The colour a black entry 0 stands for when pixels are chosen: the
+  // near-black it replaced (0: black itself). Shown black, it takes the
+  // pixels of that colour, flat, not a pattern of black and the next one.
+  uint16_t dark;
 } picture16_palette_t;
 
 // How the histogram's colours count when the palette is chosen.

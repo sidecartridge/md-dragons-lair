@@ -129,6 +129,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         bench.c
         cadence.c
         clip.c
+        clipplay.c
         commemul.c
         convert.c
         convjob.c

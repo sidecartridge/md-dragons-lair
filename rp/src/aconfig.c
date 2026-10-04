@@ -8,6 +8,8 @@
 static SettingsConfigEntry defaultEntries[] = {
     {ACONFIG_PARAM_FOLDER, SETTINGS_TYPE_STRING, APP_FOLDER},
     {ACONFIG_PARAM_MODE, SETTINGS_TYPE_INT, "255"},  // 255: Menu mode
+    {ACONFIG_PARAM_VOLUME_YM, SETTINGS_TYPE_INT, "9"},
+    {ACONFIG_PARAM_VOLUME_DMA, SETTINGS_TYPE_INT, "0"},
 };
 
 // Create a global context for our settings

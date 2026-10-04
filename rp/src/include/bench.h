@@ -41,8 +41,17 @@
 #define DEVHOOKS_APP_WRITE_TEST 6  // [WORD: chunk in sectors] the card's
                                    // write rate (a 2 MB scratch file in the
                                    // folder, then deleted)
+#define DEVHOOKS_APP_CONVERT_ALL 9  // the whole game for the machine
+                                    // plugged in (as C)
+#define DEVHOOKS_APP_PLAY 8        // WORD N [WORD 3|4 [WORD F]]: scene
+                                   // clip N's clip file played (the ST or
+                                   // the STE set; from frame F); no word:
+                                   // stopped (a soak run too), then back
+#define DEVHOOKS_APP_SOAK 10       // [WORD N [WORD 3|4]]: every clip from
+                                   // N to the last, one after the other
 #define DEVHOOKS_APP_CONVERT 7     // WORD N [WORD 3|4]: scene clip N
-                                   // converted into BENCH_FOLDER/<clip>.DLC
+                                   // converted into BENCH_FOLDER/STE or
+                                   // /ST, <clip>.DLC
                                    // (for an ST or an STE; the machine
                                    // plugged in's by default); no word: back
 

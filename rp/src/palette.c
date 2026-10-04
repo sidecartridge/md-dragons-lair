@@ -14,7 +14,9 @@
 
 #include "palette.h"
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "cart_shared.h"
 #include "memfunc.h"
@@ -51,22 +53,62 @@ static const uint16_t s_default_palette[PALETTE_ENTRIES] = {
 };
 
 static uint16_t *s_palette_slot;
+static volatile uint16_t *s_gen_slot;
+static uint16_t s_gen;
+static uint16_t s_now[PALETTE_ENTRIES];    // the palette now
+static uint16_t s_frame[PALETTE_ENTRIES];  // palette_set_frame()'s
+static bool s_frame_given;
+static uint16_t s_prepared[PALETTE_ENTRIES];  // the prepared frame's
+
+static volatile uint16_t *cart_word(uint32_t offset) {
+  return (volatile uint16_t *)((uint8_t *)&__rom_in_ram_start__ + offset);
+}
+
+// The palette now into the cart, bit 15 of its generation set while it
+// changes, then a new generation: the ST never takes half of one.
+static void write_now(void) {
+  *s_gen_slot = (uint16_t)(s_gen | CART_PALETTE_GEN_BUSY);
+  __sync_synchronize();
+  for (uint32_t i = 0; i < PALETTE_ENTRIES; i++) {
+    s_palette_slot[i] = s_now[i];
+  }
+  s_gen = (uint16_t)((s_gen + 1u) & (CART_PALETTE_GEN_BUSY - 1u));
+  __sync_synchronize();
+  *s_gen_slot = s_gen;
+}
 
 void palette_init(void) {
-  uint8_t *base = (uint8_t *)&__rom_in_ram_start__;
-  s_palette_slot = (uint16_t *)(base + CART_PALETTE_OFFSET);
+  s_palette_slot = (uint16_t *)cart_word(CART_PALETTE_OFFSET);
+  s_gen_slot = cart_word(CART_PALETTE_GEN_OFFSET);
   palette_set(s_default_palette);
 }
 
 void palette_set(const uint16_t entries[PALETTE_ENTRIES]) {
-  for (uint32_t i = 0; i < PALETTE_ENTRIES; i++) {
-    s_palette_slot[i] = entries[i];
-  }
+  memcpy(s_now, entries, sizeof(s_now));
+  write_now();
 }
 
 void palette_set_entry(uint8_t idx, uint16_t color) {
   if (idx >= PALETTE_ENTRIES) {
     return;
   }
-  s_palette_slot[idx] = color;
+  s_now[idx] = color;
+  write_now();
+}
+
+void palette_set_frame(const uint16_t entries[PALETTE_ENTRIES]) {
+  memcpy(s_frame, entries, sizeof(s_frame));
+  s_frame_given = true;
+}
+
+void palette_prepare_frame(void) {
+  memcpy(s_prepared, s_frame_given ? s_frame : s_now, sizeof(s_prepared));
+  s_frame_given = false;
+}
+
+void palette_write_frame(void) {
+  volatile uint16_t *slot = cart_word(CART_FRAME_PALETTE_OFFSET);
+  for (uint32_t i = 0; i < PALETTE_ENTRIES; i++) {
+    slot[i] = s_prepared[i];
+  }
 }

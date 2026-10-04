@@ -19,14 +19,11 @@
 #include "ikbd_demux.h"
 #include "pico/stdlib.h"
 
-/* IKBD scancode for the ESC key. ESC press+release less than
- * IKBD_ESC_RELEASE_VBLS of the ST's VBLs apart triggers CMD_BOOT_GEM via the
- * cart command sentinel. Counted on the ST's clock (its byte count, reported
- * every VBL, in the same stream as the bytes), not when the RP reads the
- * bytes: a main loop held up for a while (a conversion step) reads a press
- * and its release far apart. */
+/* IKBD scancode for the ESC key. An ESC release after an ESC press of the
+ * same ST session triggers CMD_BOOT_GEM via the cart command sentinel,
+ * however long the key was held: a press had to end within 200 ms once, and
+ * a normal press (about 340 ms, measured) was ignored. */
 #define IKBD_SCANCODE_ESC 0x01u
-#define IKBD_ESC_RELEASE_VBLS 10u  /* 200 ms at 50 Hz */
 
 #define IKBD_RING_MASK (IKBD_RING_CAPACITY - 1u)
 
@@ -71,9 +68,7 @@ static ikbd_key_event_t s_key_ring[IKBD_KEY_RING_SIZE];
 static uint8_t          s_key_head = 0;
 static uint8_t          s_key_tail = 0;
 
-/* The ST's VBLs seen in the stream, and the one of an ESC press pending. */
-static uint32_t s_vbls = 0;
-static uint32_t s_esc_press_vbl = 0;
+/* An ESC press seen, its release still to come. */
 static bool s_esc_pressed = false;
 
 /* When true (default), ESC press+release pairs write CMD_BOOT_GEM to
@@ -222,12 +217,10 @@ static void push_key(void *ctx, uint8_t scancode, bool is_press) {
   if (scancode == IKBD_SCANCODE_ESC) {
     if (is_press) {
       s_esc_pressed = true;
-      s_esc_press_vbl = s_vbls;
     } else {
       bool pressed = s_esc_pressed;
       s_esc_pressed = false;
-      if (s_esc_auto_exit && pressed &&
-          (s_vbls - s_esc_press_vbl) < IKBD_ESC_RELEASE_VBLS) {
+      if (s_esc_auto_exit && pressed) {
         *((volatile uint32_t *)((uintptr_t)&__rom_in_ram_start__ +
                                 CART_CMD_SENTINEL_OFFSET)) =
             cart_asM68kLong(CART_CMD_BOOT_GEM);
@@ -261,7 +254,6 @@ void ikbd_pump(void) {
         ikbd_demux_injected(&s_demux, value);
         break;
       case CART_ROM3_IKBD_COUNT_WINDOW:
-        s_vbls++;
         ikbd_demux_tick(&s_demux, value);
         break;
       case CART_ROM3_IKBD_OVERRUN_WINDOW:
@@ -281,6 +273,7 @@ void ikbd_pump(void) {
         /* The ST booted and reset the IKBD: nothing held any more, and the
          * mode's commands go out again (the block may hold others). */
         s_live_mode = -1;
+        s_esc_pressed = false;
         ikbd_demux_session(&s_demux);
         ikbd_set_input_mode(s_mode);
         break;

@@ -79,6 +79,22 @@ void fb_clear(void);
  *         once per frame after drawing. */
 void fb_publish(void);
 
+/** @brief fb_publish() in two steps, for an app that keeps a frame ready
+ *         while it draws the next: fb_publish_prepare() converts
+ *         `fb_chunked_buffer` into the planar frame (fb_planar_scratch, about
+ *         1 ms) and takes the frame's palette (palette_set_frame() or the
+ *         palette now); from then on the app may draw the next picture and
+ *         set its palette. fb_publish_commit() puts the prepared frame on the
+ *         ST (steps 2 and 3 above). Nothing else may publish, or borrow the
+ *         planar scratch, between the two. */
+void fb_publish_prepare(void);
+void fb_publish_commit(void);
+
+/** @brief Whether fb_publish_commit() would go on at once: the ST has
+ *         copied the frame published before (fb_pump_rom3() sees it). An app
+ *         that must not stall (its sound to top up) commits only then. */
+bool fb_publish_ready(void);
+
 /** @brief Drain the ROM3 commemul ring once, routing each captured
  *         sample to BOTH the IKBD demux and the VBL frame-sync
  *         detector. Call from the main loop in place of a bare

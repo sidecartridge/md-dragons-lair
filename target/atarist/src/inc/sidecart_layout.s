@@ -17,7 +17,9 @@
 ;   $FA4028  AUDIO_OUT_ADDR             2 B   (slot 6: the RP keeps the ST to the YM)
 ;   $FA402C  BLIT_MODE_ADDR             2 B   (slot 7: the CPU or the blitter copies the screen)
 ;   $FA4030  PROFILE_ADDR               2 B   (slot 8: the app's profile, read once at boot)
+;   $FA4034  PALETTE_GEN_ADDR           2 B   (slot 9: the palette's generation)
 ;   $FA4040  PALETTE_ADDR               32 B  (slots 12..19: 16 palette words)
+;   $FA4060  FRAME_PALETTE_ADDR         32 B  (slots 20..27: the frame's palette)
 ;   $FA4100  AUDIO_BUFFER_ADDR          4096 B (YM volume pairs, or DMA samples)
 ;   $FA5100  BOOT_STATUS_ADDR           2 B   read once in pre_auto: 0 = start
 ;   $FA5102  BOOT_MESSAGE_ADDR          126 B why the RP refused; printed before GEM
@@ -50,10 +52,17 @@ IKBD_OUT_SIZE           equ 16
 IKBD_OUT_MAX            equ (IKBD_OUT_SIZE - 4)
 IKBD_OUT_BUSY_BIT       equ 15
 
-; 16-entry ST palette, published by the RP and applied by userfw every VBL.
-; Slots 12..19 of SHARED_VARIABLES.
+; The ST palette, two of them (16 words each). The palette now (slots
+; 12..19), which userfw puts in the shifter at the VBL after its generation
+; (slot 9) changes; bit 15 of the generation is set while the RP writes it.
+; And the frame's palette (slots 20..27), written by the RP with the frame:
+; userfw copies it with the frame and puts it in the shifter at the VBL that
+; first shows that frame.
 PALETTE_ADDR            equ (SHARED_BLOCK_ADDR + $40)                  ; $FA4040
 PALETTE_SIZE            equ 32                                         ; 16 words
+PALETTE_GEN_ADDR        equ (SHARED_VARIABLES + (9 * 4))               ; $FA4034
+PALETTE_GEN_BUSY_BIT    equ 15
+FRAME_PALETTE_ADDR      equ (SHARED_VARIABLES + (20 * 4))              ; $FA4060
 
 ; Audio, two ways. On an STE or a Mega STE the DMA sound chip plays 8-bit
 ; samples at the profile's rate from a ring in ST RAM (userfw's UFW_DMA_RING), which

@@ -52,13 +52,16 @@ static int distance(uint16_t a, uint16_t b) {
   return d;
 }
 
-// The picture's own palette into use: each entry, nearest pairs first, to
-// the slot of the colour shown nearest to it.
+// The picture's own palette into use: the border's black (entry 0 of every
+// palette) in slot 0, then each entry, nearest pairs first, to the slot of
+// the colour shown nearest to it.
 static void take_slots(convert_t *c) {
   const picture16_palette_t *own = &c->palette;
-  bool entry_done[16] = {false};
-  bool slot_done[16] = {false};
-  for (int k = 0; k < own->colours; k++) {
+  bool entry_done[16] = {true};
+  bool slot_done[16] = {true};
+  c->map[0] = 0;
+  c->shown.rgb444[0] = own->rgb444[0];
+  for (int k = 1; k < own->colours; k++) {
     int best_e = 0;
     int best_s = 0;
     int best_d = 1 << 30;
