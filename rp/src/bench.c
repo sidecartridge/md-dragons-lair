@@ -2047,6 +2047,11 @@ static const int play_gains[] = {32,  45,  64,  91,   128,  181, 256,
 #define PLAY_OSD_US 1500000u  // a volume change shown on the pictures
 // Samples between a picture's commit and its showing: 1.5 frames.
 #define PLAY_SCREEN_DELAY (CLIP_SAMPLES * 3u / 2u)
+// The sound starts once this much is read (120 ms): the writer, which writes
+// ahead of the ST (74 ms on the DMA path), then finds it. Started with the
+// first record alone (40 ms), it held the last sample in the clip's first
+// frames: a hole in the sound.
+#define PLAY_PRIME (3u * CLIP_SAMPLES)
 
 typedef struct {
   FIL f;
@@ -2084,6 +2089,7 @@ static struct {
   uint32_t shown_frame;  // the last picture committed
   bool heard;      // the clip's sound has begun
   bool paused;
+  bool priming;    // the sound held back until PLAY_PRIME samples are read
   uint32_t pause_underruns, pause_late;  // the counters when it paused
   uint32_t underruns0, late0;
   int gain;          // play_gains' index
@@ -2091,7 +2097,18 @@ static struct {
   uint32_t osd_until;  // the volume shown on the pictures until then
   bool osd_up;
   uint8_t next_bright;  // next picture's brightest entry, for the text
+  // Where the sound's underruns and the late pictures fall.
+  uint32_t last_pass;   // the previous pass of play_frame()
+  uint32_t last_heard;
+  uint32_t seen_underruns;
+  uint32_t due_at;      // when the picture waiting became due (0: not yet)
+  bool ack_waited;      // and the ST had not copied the one before
 } s_play;
+
+// A picture this late, against its due time, is counted (and logged).
+#define PLAY_LATE_US 40000
+// A record's reading this slow is counted.
+#define PLAY_SLOW_READ_US 10000u
 
 // The last clip played, readable over SWD as well as on the screen. Times
 // in microseconds: minimum, mean and maximum, a record (reading, decoding)
@@ -2113,7 +2130,12 @@ typedef struct {
   uint32_t underruns;   // of the sound until its last sample (audioUnderruns)
   uint32_t late_slices; // audioLateSlices, the same
   int32_t lead_ms;      // the sound read ahead of what was heard, at least
+                        // (from the first picture shown)
   uint32_t start_ms;    // from the start to the first sample heard
+  uint32_t open_us;     // the file opened and its header read
+  uint32_t seek_us;     // to the frame asked for: the key, then the records
+  uint32_t slow_reads;  // records read in over PLAY_SLOW_READ_US
+  uint32_t late;        // pictures committed over PLAY_LATE_US late
 } play_results_t;
 
 __attribute__((used)) play_results_t playResults;
@@ -2164,6 +2186,8 @@ typedef struct {
   uint32_t read_max_us;
   uint32_t decode_max_us;
   uint32_t publish_max_us;
+  uint32_t slow_reads;
+  uint32_t late;
   uint32_t gaps;
   uint32_t gap_us[3];  // minimum, mean and maximum
   uint32_t total_s;
@@ -2184,9 +2208,10 @@ static int play_seek(void *ctx, uint32_t offset) {
 }
 
 // The audio's stream: the ring's samples (taken by audio_render_frame(), on
-// the main loop: never during a push); none while paused.
+// the main loop: never during a push); none while paused or priming.
 static uint32_t play_avail(void) {
-  return s_play.paused ? 0u : s_play.ring_in - s_play.ring_out;
+  return (s_play.paused || s_play.priming) ? 0u
+                                           : s_play.ring_in - s_play.ring_out;
 }
 
 static void play_take(int8_t *buf, uint32_t n) {
@@ -2238,6 +2263,9 @@ static void soak_draw(void) {
   textf(0, 12, C_TEXT, "        PUBLISH %lu.%02lu MS",
         (unsigned long)(r->publish_max_us / 1000u),
         (unsigned long)(r->publish_max_us / 10u % 100u));
+  textf(0, 13, C_TEXT, "        %lu READS OVER %lu MS, %lu LATE",
+        (unsigned long)r->slow_reads,
+        (unsigned long)(PLAY_SLOW_READ_US / 1000u), (unsigned long)r->late);
   textf(0, 14, C_TEXT, "GAP     %lu GAPS BETWEEN CLIPS, MS",
         (unsigned long)r->gaps);
   textf(0, 15, C_VALUE, "        MIN %lu  MEAN %lu  MAX %lu",
@@ -2274,6 +2302,11 @@ static void play_draw(void) {
         r->volume_db);
   textf(0, 10, C_TEXT, "START   %lu MS TO THE FIRST SOUND",
         (unsigned long)r->start_ms);
+  textf(0, 17, C_TEXT, "SLOW    %lu READS OVER %lu MS",
+        (unsigned long)r->slow_reads,
+        (unsigned long)(PLAY_SLOW_READ_US / 1000u));
+  textf(0, 18, C_TEXT, "LATE    %lu PICTURES OVER %d MS",
+        (unsigned long)r->late, PLAY_LATE_US / 1000);
   text(0, 12, C_DIM, "MS          MIN    MEAN     MAX");
   static const char *const names[3] = {"READ    ", "DECODE  ", "PUBLISH "};
   const uint32_t *stats[3] = {r->read_us, r->decode_us, r->publish_us};
@@ -2294,8 +2327,9 @@ static const char *play_volume_key(void) {
 // The sound's counters, up to now (its last sample, or a stop; while
 // paused, up to the pause: the output held its last sample since).
 static void play_sound_counters(void) {
-  uint32_t underruns = s_play.paused ? s_play.pause_underruns : audioUnderruns;
-  uint32_t late = s_play.paused ? s_play.pause_late : audioLateSlices;
+  bool held = s_play.paused || s_play.priming;
+  uint32_t underruns = held ? s_play.pause_underruns : audioUnderruns;
+  uint32_t late = held ? s_play.pause_late : audioLateSlices;
   playResults.underruns = underruns - s_play.underruns0;
   playResults.late_slices = late - s_play.late0;
 }
@@ -2327,17 +2361,20 @@ static void play_close(int result, bool chain) {
   }
   bench_set_spi_hz(s_configured_hz);
   DPRINTF("Play %s: result %d, %lu frames, %lu shown, %lu dropped, drift "
-          "%ld..%ld us, %lu underruns, %lu late slices, start %lu ms; read "
-          "%lu/%lu/%lu us, decode %lu/%lu/%lu, publish %lu/%lu/%lu\n",
+          "%ld..%ld us, %lu late pictures, %lu underruns, %lu late slices, "
+          "start %lu ms; read %lu/%lu/%lu us (%lu slow), decode %lu/%lu/%lu, "
+          "publish %lu/%lu/%lu\n",
           s_play.path, result, (unsigned long)playResults.frames,
           (unsigned long)playResults.pictures,
           (unsigned long)playResults.dropped, (long)playResults.drift_us[0],
-          (long)playResults.drift_us[1], (unsigned long)playResults.underruns,
+          (long)playResults.drift_us[1], (unsigned long)playResults.late,
+          (unsigned long)playResults.underruns,
           (unsigned long)playResults.late_slices,
           (unsigned long)playResults.start_ms,
           (unsigned long)playResults.read_us[0],
           (unsigned long)playResults.read_us[1],
           (unsigned long)playResults.read_us[2],
+          (unsigned long)playResults.slow_reads,
           (unsigned long)playResults.decode_us[0],
           (unsigned long)playResults.decode_us[1],
           (unsigned long)playResults.decode_us[2],
@@ -2366,16 +2403,17 @@ static void soak_finish(bool stopped) {
   s_dirty = true;
   const soak_results_t *r = &soakResults;
   DPRINTF("Soak %s: %d clips, %d failed (first %d), %lu frames, %lu shown, "
-          "%lu dropped, %lu underruns, %lu late, drift %ld..%ld us, lead %ld "
-          "ms, worst read %lu decode %lu publish %lu us, %lu gaps "
-          "%lu/%lu/%lu us, %lu s\n",
+          "%lu dropped, %lu late pictures, %lu underruns, %lu late, drift "
+          "%ld..%ld us, lead %ld ms, worst read %lu decode %lu publish %lu "
+          "us, %lu slow reads, %lu gaps %lu/%lu/%lu us, %lu s\n",
           stopped ? "stopped" : "done", r->clips, r->failed, r->first_failed,
           (unsigned long)r->frames, (unsigned long)r->pictures,
-          (unsigned long)r->dropped, (unsigned long)r->underruns,
-          (unsigned long)r->late_slices, (long)r->drift_us[0],
-          (long)r->drift_us[1], (long)r->lead_ms,
+          (unsigned long)r->dropped, (unsigned long)r->late,
+          (unsigned long)r->underruns, (unsigned long)r->late_slices,
+          (long)r->drift_us[0], (long)r->drift_us[1], (long)r->lead_ms,
           (unsigned long)r->read_max_us, (unsigned long)r->decode_max_us,
-          (unsigned long)r->publish_max_us, (unsigned long)r->gaps,
+          (unsigned long)r->publish_max_us, (unsigned long)r->slow_reads,
+          (unsigned long)r->gaps,
           (unsigned long)r->gap_us[0], (unsigned long)r->gap_us[1],
           (unsigned long)r->gap_us[2], (unsigned long)r->total_s);
 }
@@ -2396,6 +2434,8 @@ static void soak_record(int result) {
   s->dropped += r->dropped;
   s->underruns += r->underruns;
   s->late_slices += r->late_slices;
+  s->slow_reads += r->slow_reads;
+  s->late += r->late;
   if (r->drift_us[0] != INT32_MAX) {
     s->drift_us[0] = r->drift_us[0] < s->drift_us[0] ? r->drift_us[0]
                                                      : s->drift_us[0];
@@ -2454,6 +2494,9 @@ static int play_read_ahead(void) {
     s_play.last_us[0] = s_play.read_us;
     s_play.last_us[1] = us - s_play.read_us;
     play_stat(r->read_us, &s_play.sum[0], r->frames, s_play.last_us[0]);
+    if (s_play.last_us[0] > PLAY_SLOW_READ_US) {
+      r->slow_reads++;
+    }
     play_stat(r->decode_us, &s_play.sum[1], r->frames, s_play.last_us[1]);
     uint32_t in = s_play.ring_in;
     int gain = play_gains[s_play.gain];
@@ -2559,6 +2602,8 @@ static void play_start(int index, int bits, uint32_t frame, bool paused) {
   clipplay_io_t io = {play_read, play_seek, &s_play.m->f};
   clipplay_t *p = &s_play.m->p;
   int r = clipplay_open(p, &io, s_play.m->buf);
+  playResults.open_us = time_us_32() - s_play.called;
+  uint32_t seek_t0 = time_us_32();
   // From a frame: the key before it, then the records up to it decoded.
   if (r == 0 && frame > 0) {
     if (frame >= p->header.frames) {
@@ -2572,6 +2617,7 @@ static void play_start(int index, int bits, uint32_t frame, bool paused) {
       r = got < 0 ? got : (got == 0 ? CLIPPLAY_ERR_RECORD : 0);
     }
   }
+  playResults.seek_us = time_us_32() - seek_t0;
   s_play.first_frame = p->frame;
   s_play.first = true;
   if (r == 0) {
@@ -2581,19 +2627,22 @@ static void play_start(int index, int bits, uint32_t frame, bool paused) {
     play_end(r);
     return;
   }
-  DPRINTF("Play %s from frame %lu: %lu frames\n", s_play.path,
-          (unsigned long)s_play.first_frame,
-          (unsigned long)p->header.frames);
+  DPRINTF("Play %s from frame %lu: %lu frames; opened in %lu us, at the "
+          "frame in %lu us\n",
+          s_play.path, (unsigned long)s_play.first_frame,
+          (unsigned long)p->header.frames, (unsigned long)playResults.open_us,
+          (unsigned long)playResults.seek_us);
   s_play.underruns0 = audioUnderruns;
   s_play.late0 = audioLateSlices;
   s_play.pause_underruns = audioUnderruns;
   s_play.pause_late = audioLateSlices;
+  s_play.seen_underruns = audioUnderruns;
   playResults.drift_us[0] = INT32_MAX;
   playResults.drift_us[1] = INT32_MIN;
   playResults.lead_ms = INT32_MAX;
   s_play.t0 = time_us_32();
+  s_play.priming = true;
   audio_set_pcm_stream(play_take, play_avail, CLIP_SAMPLE_RATE);
-  audio_render_frame();  // the FIFO full before the writer's next run
   // The mouse on while it plays, as the game will have it: every packet
   // takes the ST's time, which must not touch the sound or the pictures.
   ikbd_set_input_mode(IKBD_INPUT_MOUSE);
@@ -2683,9 +2732,29 @@ static void play_frame(void) {
   }
   play_results_t *r = &playResults;
   uint32_t heard = audio_source_played();
+  uint32_t now = time_us_32();
+  uint32_t pass_us = now - s_play.last_pass;
+  uint32_t heard_step = heard - s_play.last_heard;
+  s_play.last_pass = now;
+  s_play.last_heard = heard;
+  // An underrun while it plays: where it falls, and what the reader had.
+  if (audioUnderruns != s_play.seen_underruns) {
+    if (!s_play.paused && !s_play.priming) {
+      DPRINTF("Underrun in %s at frame %lu%s: %ld samples ahead of the ear, "
+              "%lu in the ring; last read %lu us, decode %lu us; pass %lu "
+              "us\n",
+              s_play.name,
+              (unsigned long)(s_play.first_frame + heard / CLIP_SAMPLES),
+              s_play.heard ? "" : " (before its first sound)",
+              (long)(int32_t)(s_play.ring_in - heard),
+              (unsigned long)(s_play.ring_in - s_play.ring_out),
+              (unsigned long)s_play.last_us[0],
+              (unsigned long)s_play.last_us[1], (unsigned long)pass_us);
+    }
+    s_play.seen_underruns = audioUnderruns;
+  }
   if (heard > 0 && !s_play.heard) {
     s_play.heard = true;
-    uint32_t now = time_us_32();
     r->start_ms = (now - s_play.called) / 1000u;
     if (s_soak.active && s_soak.ended_at != 0) {
       soak_results_t *s = &soakResults;
@@ -2702,16 +2771,25 @@ static void play_frame(void) {
       s_soak.ended_at = 0;
     }
   }
-  if (heard > 0 && !s_play.ended) {
+  if (r->pictures > 0 && !s_play.ended) {
     int32_t lead = (int32_t)((int64_t)(int32_t)(s_play.ring_in - heard) * 1000 /
                              CLIP_SAMPLE_RATE);
     r->lead_ms = lead < r->lead_ms ? lead : r->lead_ms;
   }
   // The converted picture: on the ST when the sound reaches its frame less
-  // the screen's delay (the first, once the sound has begun, or at once
-  // when paused); dropped when the sound is past its frame's end.
-  if (s_play.ready && (heard > 0 || (s_play.paused && r->pictures == 0))) {
+  // the screen's delay (the first at once, while the sound is held back);
+  // dropped when the sound is past its frame's end.
+  if (s_play.ready &&
+      (heard > 0 || ((s_play.paused || s_play.priming) && r->pictures == 0))) {
     uint32_t due = (s_play.ready_frame - s_play.first_frame) * CLIP_SAMPLES;
+    if (heard + PLAY_SCREEN_DELAY >= due) {
+      if (s_play.due_at == 0) {
+        s_play.due_at = now;
+      }
+      if (!fb_publish_ready()) {
+        s_play.ack_waited = true;
+      }
+    }
     if (heard >= due + CLIP_SAMPLES + PLAY_SCREEN_DELAY) {
       s_play.ready = false;
       r->dropped++;
@@ -2731,6 +2809,16 @@ static void play_frame(void) {
       }
       if (s_play.ready_frame > s_play.first_frame && drift > r->drift_us[1]) {
         r->drift_us[1] = drift;
+      }
+      if (s_play.ready_frame > s_play.first_frame && drift > PLAY_LATE_US) {
+        r->late++;
+        DPRINTF("Late picture in %s, frame %lu: %ld us; due %lu us before, "
+                "%s; pass %lu us, the sound +%lu samples in it\n",
+                s_play.name, (unsigned long)s_play.ready_frame, (long)drift,
+                (unsigned long)(now - s_play.due_at),
+                s_play.ack_waited ? "the ST still copying the one before"
+                                  : "the ST ready",
+                (unsigned long)pass_us, (unsigned long)heard_step);
       }
       s_play.shown_frame = s_play.ready_frame;
       s_play.ready = false;
@@ -2756,6 +2844,8 @@ static void play_frame(void) {
     }
     palette_set_frame(s_play.next_palette);
     fb_publish_prepare();
+    s_play.due_at = 0;
+    s_play.ack_waited = false;
     s_play.ready = true;
     s_play.ready_frame = s_play.next_frame;
     s_play.next = false;
@@ -2764,6 +2854,17 @@ static void play_frame(void) {
   if (err < 0) {
     play_end(err);
     return;
+  }
+  // The sound starts once PLAY_PRIME samples are read, or all of a shorter
+  // clip; the last sample held meanwhile is no underrun, up to the FIFO's
+  // first top-up.
+  if (s_play.priming &&
+      (s_play.ring_in - s_play.ring_out >= PLAY_PRIME || s_play.ended)) {
+    s_play.priming = false;
+    audio_render_frame();
+    s_play.underruns0 = s_play.pause_underruns = audioUnderruns;
+    s_play.late0 = s_play.pause_late = audioLateSlices;
+    s_play.seen_underruns = audioUnderruns;
   }
   // The end: everything read and shown, the clip's sound heard; silence
   // after it, as the ring has room.

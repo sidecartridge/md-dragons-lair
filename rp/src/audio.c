@@ -795,13 +795,17 @@ uint32_t audio_source_played(void) {
   if (!source_set()) {
     return 0;
   }
-  uint32_t out;   /* the source's output samples played */
-  uint32_t step;
+  uint32_t out = 0; /* the source's output samples played */
+  uint32_t step = 0;
+  /* The writer's interrupt changes the report, its time and the tables:
+   * they are read at one moment, with the time now. Read apart, a report
+   * that arrived between the time and its own made since_us wrap, and the
+   * estimate jumped to its limit for that call (60 ms on the DMA path, a
+   * VBL on the YM): a picture waiting for the sound went on the ST that
+   * much early, about three times a minute. */
+  uint32_t irq = save_and_disable_interrupts();
   uint32_t since_us = time_us_32() - s_last_report_us;
-  if (s_out == AUDIO_OUT_DMA) {
-    if (!s_dma_known) {
-      return 0;
-    }
+  if (s_out == AUDIO_OUT_DMA && s_dma_known) {
     if (since_us > AUDIO_DMA_EST_MAX_US) since_us = AUDIO_DMA_EST_MAX_US;
     uint32_t at = (s_dma_play + since_us * PROFILE_DMA_RATE_HZ / 1000000u) &
                   AUDIO_DMA_RING_MASK;
@@ -809,25 +813,20 @@ uint32_t audio_source_played(void) {
                                at % AUDIO_PLAYED_UNIT - s_src_base);
     out = played > 0 ? (uint32_t)played : 0u;
     step = rate_step(PROFILE_DMA_RATE_HZ);
-  } else if (s_out == AUDIO_OUT_YM) {
-    if (!s_st_known) {
-      return 0;
-    }
+  } else if (s_out == AUDIO_OUT_YM && s_st_known) {
     uint32_t written = s_slice_fifo[s_st_vbl % CART_AUDIO_SLICES];
     int32_t slices = (int32_t)((written >> 1) - s_src_base);
-    if (slices < 0) {
-      return 0;
+    if (slices >= 0) {
+      /* Into the slice playing, unless it holds the last sample. */
+      uint32_t into = 0;
+      if ((written & 1u) == 0u) {
+        into = since_us * AUDIO_NATIVE_RATE_HZ / 1000000u;
+        if (into > AUDIO_FILL_SAMPLES_PER_VBL) into = AUDIO_FILL_SAMPLES_PER_VBL;
+      }
+      out = (uint32_t)slices * AUDIO_FILL_SAMPLES_PER_VBL + into;
+      step = rate_step(AUDIO_NATIVE_RATE_HZ);
     }
-    /* Into the slice playing, unless it holds the last sample. */
-    uint32_t into = 0;
-    if ((written & 1u) == 0u) {
-      into = since_us * AUDIO_NATIVE_RATE_HZ / 1000000u;
-      if (into > AUDIO_FILL_SAMPLES_PER_VBL) into = AUDIO_FILL_SAMPLES_PER_VBL;
-    }
-    out = (uint32_t)slices * AUDIO_FILL_SAMPLES_PER_VBL + into;
-    step = rate_step(AUDIO_NATIVE_RATE_HZ);
-  } else {
-    return 0;
   }
+  restore_interrupts(irq);
   return (uint32_t)(((uint64_t)out * step) >> 16);
 }
