@@ -141,6 +141,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         fb_chunked.c
         fb_chunked_asm.S
         fb_font.c
+        game.c
         game_table.c
         gconfig.c
         ikbd.c
