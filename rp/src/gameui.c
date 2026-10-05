@@ -336,6 +336,8 @@ static void line_over(int y, uint8_t bright, const char *str) {
   font_print(str);
 }
 
+static uint32_t clip_ms(void);
+
 static void overlay(uint32_t frame, uint8_t bright) {
   (void)frame;
   if (s_ui.mode == MODE_ATTRACT) {
@@ -347,6 +349,25 @@ static void overlay(uint32_t frame, uint8_t bright) {
   }
   if ((s_ui.options & GAMEUI_OPT_HINTS) && !s_ui.game.options.watch) {
     draw_hint(bright);
+#ifdef GAMEUI_TRACE
+    // The hint drawn, as it changes: on which picture, and where the sound
+    // (the engine's clock) is then.
+    static int last_hint = -1;
+    uint8_t in = 0;
+    bool open = false;
+    bool has = game_hint(&s_ui.game, &in, &open);
+    int now = has ? in * 2 + open : -1;
+    if (now != last_hint) {
+      last_hint = now;
+      DPRINTF("Hint %d %s drawn on frame %lu; the sound at frame %lu, %s at %lu "
+              "ms\n",
+              has ? in : -1, has ? (open ? "open" : "to come") : "none",
+              (unsigned long)frame,
+              (unsigned long)(player_first_frame() + clip_ms() / FRAME_MS),
+              game_sequence_names[s_ui.game.sequence],
+              (unsigned long)s_ui.game.sequence_ms);
+    }
+#endif
   }
   if (time_us_32() - s_ui.scene_t0 < BANNER_US) {
     char line[41];
