@@ -431,8 +431,8 @@ int main(void) {
     }
   }
   check_stability();
-  check_clip_file(3, 0xD3AF8385u);
-  check_clip_file(4, 0xE2726DE7u);
+  check_clip_file(3, 0xA6D2B3DDu);
+  check_clip_file(4, 0xD585959Fu);
   for (int i = 0; i < (int)MPEG1_MAX_SLOTS; i++) {
     free(slots[i]);
   }

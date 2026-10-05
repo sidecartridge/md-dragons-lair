@@ -95,8 +95,9 @@ five literals of 64 instead (5 x 33 = 165 bytes), so a row never takes more than
 ## Key pictures and the index
 
 The index lists the clip's first picture, then any picture that starts 50 frames (2 s) or more
-after the last one listed, and any picture the converter is asked to list (the points the game
-will start a clip from); each of them is a key. Other pictures may be keys too: the cartridge
+after the last one listed, and any picture the converter is asked to list: the game's sequence
+starts (`game_starts` in `rp/src/game_table.c`), so that the game starts any of them at once (since
+the converter's version 3); each of them is a key. Other pictures may be keys too: the cartridge
 stores every picture whole, since a delta needs the picture before and the cartridge has no room
 to keep it (keeping it on the card took longer than the conversion itself). `dlconv encode`
 writes the same file, or deltas with `--deltas`.

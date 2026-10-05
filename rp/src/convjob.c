@@ -133,8 +133,10 @@ static void job_begin(void *ctx, const convert_picture_t *picture) {
   const int8_t *sound = frame_sound(j);
   uint32_t t0 = time_us_32();
   uint64_t write0 = j->times.write;
+  bool key = clip_key_in(j->keys, j->key_count, picture->first_frame,
+                         picture->frames);
   clip_writer_picture(j->m.writer, picture->frames, picture->palette->rgb444,
-                      false, sound);
+                      key, sound);
   encode_time(j, t0, write0);
   sound_taken(j);
 }
@@ -170,11 +172,14 @@ static void job_end(void *ctx, const convert_picture_t *picture) {
 int convjob_start(convjob_t *j, const convjob_memory_t *memory,
                   iso9660_t *iso, const iso9660_entry_t *entry,
                   const char *out_path, int gun_bits,
+                  const uint16_t *keys, uint16_t key_count,
                   picture16_run2_fn run2,
                   uint32_t (*cycles)(void)) {
   memset(j, 0, sizeof(*j));
   j->m = *memory;
   j->gun_bits = gun_bits;
+  j->keys = keys;
+  j->key_count = keys != NULL ? key_count : 0u;
   if (iso9660_fopen_entry(iso, &j->video_file, entry) != ISO9660_OK ||
       iso9660_fopen_entry(iso, &j->audio_file, entry) != ISO9660_OK) {
     j->result = CONVJOB_ERR_OPEN;

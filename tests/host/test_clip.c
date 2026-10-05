@@ -382,7 +382,20 @@ static void check_damage(void) {
   free(damaged);
 }
 
+// clip_key_in(): a picture shown for a span lists itself as a key when a
+// listed frame falls in it.
+static void check_key_in(void) {
+  static const uint16_t keys[] = {1, 60, 474, 543};
+  CHECK(clip_key_in(keys, 4, 0, 2));     // 1 in [0, 2)
+  CHECK(!clip_key_in(keys, 4, 2, 58));   // [2, 60)
+  CHECK(clip_key_in(keys, 4, 59, 2));    // 60 in [59, 61)
+  CHECK(clip_key_in(keys, 4, 543, 1));
+  CHECK(!clip_key_in(keys, 4, 544, 100));
+  CHECK(!clip_key_in(NULL, 0, 0, 1000));
+}
+
 int main(void) {
+  check_key_in();
   check_rows();
   check_header();
   make_pictures();

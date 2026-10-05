@@ -62,6 +62,7 @@
 #include "clip.h"
 #include "convert.h"
 #include "crc32.h"
+#include "game_table.h"
 #include "mp2_audio.h"
 #include "mpeg1_video.h"
 #include "mpeg_ps.h"
@@ -543,6 +544,8 @@ typedef struct {
   uint32_t pictures;
   uint64_t picture_bytes;    // of the pictures' records
   uint32_t record_start;
+  const uint16_t *keys;      // the game's sequence starts in the clip
+  uint16_t key_count;
 } enc_sink_t;
 
 // A frame's sound: the samples there are, the rest silent (past the
@@ -575,7 +578,9 @@ static int enc_header(void *ctx, const uint8_t header[CLIP_HEADER_BYTES]) {
 static void enc_begin(void *ctx, const convert_picture_t *picture) {
   enc_sink_t *k = (enc_sink_t *)ctx;
   k->record_start = k->w.offset;
-  clip_writer_picture(&k->w, picture->frames, picture->palette->rgb444, false,
+  clip_writer_picture(&k->w, picture->frames, picture->palette->rgb444,
+                      clip_key_in(k->keys, k->key_count, picture->first_frame,
+                                  picture->frames),
                       enc_sound(k, k->frame));
 }
 
@@ -620,6 +625,14 @@ static int encode_clip(int argc, char **argv) {
   if (in == NULL || sink.f == NULL) {
     perror("dlconv");
     return 1;
+  }
+  // The game's sequence starts in this clip, listed as key pictures, as
+  // the cartridge lists them.
+  const char *base = strrchr(clip, '/');
+  int game_clip = game_clip_find(base != NULL ? base + 1 : clip);
+  if (game_clip >= 0) {
+    sink.keys = &game_starts[game_clips[game_clip].first_start];
+    sink.key_count = game_clips[game_clip].start_count;
   }
   // The source's size and CRC-32, for the header.
   static uint8_t chunk[1u << 16];

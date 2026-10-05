@@ -26,6 +26,7 @@
 #include "clipplay.h"
 #include "convjob.h"
 #include "fb_blit.h"
+#include "game_table.h"
 #include "iso9660.h"
 #include "manifest.h"
 #include "mp2_audio.h"
@@ -2195,8 +2196,12 @@ static void conv_begin(const iso9660_entry_t *entry) {
   bench_start_cycles();
   DPRINTF("Convert %s into %s for %s\n", s_cv.clip, s_cv.out_path,
           s_cv.gun_bits == 4 ? "an STE" : "an ST");
+  // The game's sequence starts in this clip, listed as key pictures.
+  int clip = game_clip_find(entry->name);
+  const game_clip_t *gc = clip >= 0 ? &game_clips[clip] : NULL;
   int r = convjob_start(s_cv.job, &m, &s_iso, entry, s_cv.out_path,
-                        s_cv.gun_bits, bench_run2, bench_cycles);
+                        s_cv.gun_bits, gc ? &game_starts[gc->first_start] : NULL,
+                        gc ? gc->start_count : 0u, bench_run2, bench_cycles);
   if (r < 0) {
     conv_finish(r);
   }

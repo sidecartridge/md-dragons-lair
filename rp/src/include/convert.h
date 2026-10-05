@@ -45,7 +45,7 @@
 
 // The converter's version, in every clip it writes: a clip of another
 // version is converted again. Raise it when the converter's output changes.
-#define CONVERT_VERSION 2
+#define CONVERT_VERSION 3  // 3: the game's sequence starts listed as key pictures
 
 // The game's palette stability (keep_percent): measured on the whole game
 // against ffmpeg's recipe held to the machine's colours, and chosen by eye.

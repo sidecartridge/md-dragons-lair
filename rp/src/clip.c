@@ -341,6 +341,19 @@ bool clip_writer_picture(clip_writer_t *w, uint32_t frames,
   return w->key;
 }
 
+bool clip_key_in(const uint16_t *keys, uint16_t key_count, uint32_t first,
+                 uint32_t count) {
+  for (uint16_t i = 0; i < key_count; i++) {
+    if (keys[i] >= first + count) {
+      return false;
+    }
+    if (keys[i] >= first) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void clip_writer_row(clip_writer_t *w, const uint8_t *row,
                      const uint8_t *before) {
   size_t n = clip_encode_row(row, w->key ? NULL : before, w->row);
