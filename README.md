@@ -74,9 +74,8 @@ scores, the bench and what to do when something goes wrong.
 # ./build.sh <board> <build_type> <app_uuid>
 #   board:      pico_w
 #   build_type: debug | release
-#   app_uuid:   the app's UUID4 (desc/app.json); 44444444-4444-4444-8444-444444444444 for
-#               local builds
-./build.sh pico_w release 44444444-4444-4444-8444-444444444444
+#   app_uuid:   the app's UUID4, 7c5f4899-ce5f-4ee2-92c1-3700d2d55594
+./build.sh pico_w release 7c5f4899-ce5f-4ee2-92c1-3700d2d55594
 ```
 
 The firmware is `dist/<APP_UUID>-<VERSION>.uf2`. It needs the ARM GNU Toolchain 14.2

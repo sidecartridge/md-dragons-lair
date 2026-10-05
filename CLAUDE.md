@@ -49,11 +49,11 @@ Top-level build is driven by `build.sh` in the repo root:
 ```bash
 # <board_type> = pico_w
 # <build_type> = debug | release   (both compiled as CMake Release, -O3 — see below)
-# <app_uuid_key> = UUID4 identifying this app, must match desc/app.json
-./build.sh pico_w release 44444444-4444-4444-8444-444444444444
+# <app_uuid_key> = UUID4 identifying this app (its store entry and settings)
+./build.sh pico_w release 7c5f4899-ce5f-4ee2-92c1-3700d2d55594
 ```
 
-Use the dev UUID `44444444-4444-4444-8444-444444444444` for local builds — any other UUID keys the UF2 to an identity with no config sector and the app jumps to Booster.
+The app's UUID is `7c5f4899-ce5f-4ee2-92c1-3700d2d55594`: every build uses it (`tools/dev/flash.sh` and the CMake default too; CI and releases take it from the `APP_UUID` secret). It keys the app's settings on the device: a cartridge runs a build only once Booster has installed Dragon's Lair, which gives the UUID its config sector; on one that has not, the app jumps to Booster. The development UUID `44444444-4444-4444-8444-444444444444` is a separate identity with settings of its own (`APP_UUID_KEY=44444444-4444-4444-8444-444444444444 tools/dev/flash.sh ...`), for a cartridge the app was never installed on.
 
 To rebuild only the m68k side (needed whenever `target/atarist/` changes, since it regenerates `rp/src/include/target_firmware.h`), run `target/atarist/build.sh` directly, from its own folder: `(cd target/atarist && ./build.sh "$PWD" release 0)`. The third argument is `_DEBUG` (0 for a release image, 1 for a debug one); left out, with no `DEBUG_MODE` in the environment, the Makefile's default of 1 applies.
 

@@ -281,8 +281,8 @@ if(DEFINED ENV{APP_UUID_KEY} AND NOT "$ENV{APP_UUID_KEY}" STREQUAL "")
     message(STATUS "Using APP_UUID_KEY from environment: $ENV{APP_UUID_KEY}")
     add_definitions(-DCURRENT_APP_UUID_KEY=\"$ENV{APP_UUID_KEY}\")
 else()
-    message(STATUS "Using default UUID")
-    add_definitions(-DCURRENT_APP_UUID_KEY=\"44444444-4444-4444-8444-444444444444\")
+    message(STATUS "Using the app's UUID")
+    add_definitions(-DCURRENT_APP_UUID_KEY=\"7c5f4899-ce5f-4ee2-92c1-3700d2d55594\")
 endif()
 
 # Pass the _DEBUG flag to the C compiler

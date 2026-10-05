@@ -30,9 +30,9 @@ stcmd ls
 # Host tests: the firmware's pure logic, in seconds
 make -C tests/host test
 
-# Build firmware (board, build type, the development UUID)
+# Build firmware (board, build type, the app's UUID)
 PICO_TOOLCHAIN_PATH=/Applications/ArmGNUToolchain/14.2.rel1/arm-none-eabi/bin \
-  ./build.sh pico_w release 44444444-4444-4444-8444-444444444444
+  ./build.sh pico_w release 7c5f4899-ce5f-4ee2-92c1-3700d2d55594
 ```
 
 With the Debug Probe attached (SWD and the debug UART), `tools/dev/` builds, flashes and verifies the RP, captures its console and reads or drives it from the host (see `tools/dev/README.md`):
@@ -48,7 +48,7 @@ python3 tools/dev/tools_harness.py --build --flash --reset
 - Expect harmless VASM warnings (`target data type overflow`, `trailing garbage after option -D`).
 - The build script auto-copies `version.txt`, rebuilds the Atari target, then the RP target. A fresh clone has empty submodule folders: the first `./build.sh` clones and pins them.
 - Successful builds drop the UF2 into `dist/` as `<UUID>-<version>.uf2` (`version.txt` already carries the `v`) and print the MD5 used in the generated JSON manifest.
-- Use the development UUID `44444444-4444-4444-8444-444444444444` for local builds: any other UUID has no config sector and the app jumps to Booster.
+- Builds use the app's UUID `7c5f4899-ce5f-4ee2-92c1-3700d2d55594`; a cartridge runs them once Booster has installed the app (its config sector), otherwise the app jumps to Booster. The development UUID `44444444-4444-4444-8444-444444444444` is a separate identity for a cartridge the app was never installed on.
 - The Atari cartridge image (header + m68k code) must fit in 16 KB; `target/atarist/build.sh` enforces this against `BOOT.BIN` and aborts if exceeded. The 16 KB matches `CART_CARTRIDGE_CODE_SIZE` in `rp/src/include/cart_shared.h` and `CARTRIDGE_CODE_SIZE` in `target/atarist/src/inc/sidecart_layout.s`.
 - After a change in `target/atarist/`, rebuild the m68k image (`./build.sh`, or `(cd target/atarist && ./build.sh "$PWD" release 0)`): it regenerates `rp/src/include/target_firmware.h`, which `tools/dev/flash.sh` does not.
 - FatFs configuration lives at `rp/src/ff/ffconf.h`. `rp/src/CMakeLists.txt` puts that directory ahead of the `fatfs-sdk` include path with `target_include_directories(... BEFORE PRIVATE)`, so the override wins and the submodule stays clean. Do not edit the submodule's copy.
