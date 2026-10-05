@@ -479,7 +479,10 @@ static game_options_t options_for_game(void) {
   o.fixed_order = (s_ui.options & GAMEUI_OPT_FIXED) != 0;
   o.start_scene = s_ui.start_scene;
 #ifdef GAMEUI_TRACE
-  o.infinite_lives |= s_bot.on;  // a death is reported, and the bot goes on
+  if (s_bot.on) {
+    o.infinite_lives = true;  // a death is reported, and the bot goes on
+    o.watch = false;          // the bot's presses make the moves
+  }
 #endif
   return o;
 }
