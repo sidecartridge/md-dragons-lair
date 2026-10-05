@@ -46,9 +46,9 @@ typedef struct {
   bool watch;              // the game makes every right move itself
   bool fixed_order;        // the first scene of each row, not one at random
   uint16_t start_scene;    // a scene to start the game at, or GAME_SCENE_NONE
-  // A move pressed this long after its window still passes, unless a window
-  // of its input is open then (a death that follows stays one); the
-  // sequence's end waits for it. 0: DirkSimple's windows exactly.
+  // A move pressed this long after its window still passes, even where a
+  // window of its input that kills has opened since; the sequence's end
+  // waits for it. 0: DirkSimple's windows exactly.
   uint16_t grace_ms;
   bool retry;              // a death replays its scene, not the next row's
 } game_options_t;

@@ -259,6 +259,22 @@ static void check_actions(game_t *g, uint32_t pressed, game_out_t *out) {
     return;
   }
   const game_sequence_t *s = seq_of(g);
+  // The grace: a move that passes, pressed just after its window, passes,
+  // even where a window of its input that kills has opened since.
+  if (g->options.grace_ms > 0 && g->playing) {
+    for (uint16_t i = 0; i < s->action_count; i++) {
+      uint16_t a = (uint16_t)(s->first_action + i);
+      const game_action_t *act = &game_actions[a];
+      if (passes(act) && (pressed & GAME_BIT(act->input)) &&
+          g->sequence_ms + g->options.grace_ms > grace_end(g, s, act) &&
+          g->sequence_ms <= grace_end(g, s, act)) {
+        g->accepted = a;
+        out->taken = a;
+        out->sounds |= GAME_SOUND_ACCEPT;
+        return;
+      }
+    }
+  }
   for (int pass = 0; pass < 2; pass++) {
     for (uint16_t i = 0; i < s->action_count; i++) {
       uint16_t a = (uint16_t)(s->first_action + i);
@@ -290,22 +306,6 @@ static void check_actions(game_t *g, uint32_t pressed, game_out_t *out) {
     }
     if ((pressed & DIAGONALS) == 0) {
       break;
-    }
-  }
-  // The grace: a move that passes, pressed just after its window, when no
-  // window of its input is open (one was, it was taken above).
-  if (g->options.grace_ms > 0 && g->playing) {
-    for (uint16_t i = 0; i < s->action_count; i++) {
-      uint16_t a = (uint16_t)(s->first_action + i);
-      const game_action_t *act = &game_actions[a];
-      if (passes(act) && (pressed & GAME_BIT(act->input)) &&
-          g->sequence_ms > act->from_ms &&
-          g->sequence_ms <= grace_end(g, s, act)) {
-        g->accepted = a;
-        out->taken = a;
-        out->sounds |= GAME_SOUND_ACCEPT;
-        return;
-      }
     }
   }
   if ((pressed & MOVES) && g->playing) {

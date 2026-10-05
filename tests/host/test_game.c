@@ -269,9 +269,9 @@ static void check_hint_open(void) {
   CHECK(checked > 0);
 }
 
-// The grace: a move that passes, pressed 100 ms after its window when no
-// window of its input is open then, passes with a grace of 250 ms and not
-// without; pressed in a window of its input that kills, it kills.
+// The grace: a move that passes, pressed 100 ms after its window, passes
+// with a grace of 250 ms and not without, also where a window of its input
+// that kills has opened since (that one takes it without the grace).
 static void check_grace(void) {
   int passed = 0, killed = 0;
   for (uint16_t q = 0; q < game_sequence_count; q++) {
@@ -310,7 +310,7 @@ static void check_grace(void) {
         game_out_t out;
         game_tick(&g, t, GAME_BIT(act->input), 1, &out);
         if (open != NULL && (game_sequences[open->next].flags & GAME_SEQ_KILLS)) {
-          CHECK(out.taken != a);  // the death's window wins
+          CHECK(grace ? out.taken == a : out.taken != a);  // the grace wins
           killed += grace;
         } else if (open == NULL && t <= seq->timeout_ms + 250u) {
           CHECK(grace ? out.taken == a : out.taken != a);
@@ -337,7 +337,8 @@ static void check_grace(void) {
   sim_play(&idle, NULL, GAME_TICKS);
   CHECK(idle.over && !idle.won);
   CHECK_EQ(idle.lives_lost, 5);
-  printf("grace: %d late presses passed, %d deaths kept\n", passed, killed);
+  printf("grace: %d late presses passed, %d of them over a death's window\n",
+         passed + killed, killed);
 }
 
 // Retry: a player doing nothing dies five times in the first scene after
