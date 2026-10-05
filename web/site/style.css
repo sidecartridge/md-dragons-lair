@@ -187,6 +187,7 @@ h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
 .clips li { display: flex; gap: 0.6rem; align-items: center; margin: 0.2rem 0; }
 .clips .name { width: 9.5rem; flex: none; }
 .clips .bar { flex: 1; height: 8px; }
+.clips .writing .fill { opacity: 0.4; }  /* converted, waiting to be written */
 
 .app-footer {
   margin-top: 2rem;

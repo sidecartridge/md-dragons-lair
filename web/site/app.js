@@ -170,6 +170,7 @@ async function convert() {
   $('done').hidden = true;
   $('progress').hidden = false;
   $('progress-title').textContent = 'Converting';
+  $('progress').scrollIntoView({ behavior: 'smooth', block: 'start' });  // below the fold
 
   // The jobs: every clip of every set, the largest first so that the
   // workers end together.
@@ -184,6 +185,7 @@ async function convert() {
   const failures = [];
   let doneBytes = 0;
   let finished = 0;
+  let writing = 0;  // converted, waiting their turn to be written
   const t0 = performance.now();
 
   const count = Math.min(WORKERS, queue.length);
@@ -209,7 +211,8 @@ async function convert() {
       for (const v of partial.values()) bytes += v;
       const fraction = total ? bytes / total : 0;
       $('overall').style.width = `${(fraction * 100).toFixed(1)}%`;
-      $('count').textContent = `${finished} of ${jobs.length} clips`;
+      $('count').textContent = `${finished} of ${jobs.length} clips` +
+        (writing ? `, ${writing} being written` : '');
       const elapsed = performance.now() - t0;
       $('left').textContent = fraction > 0.03
         ? `about ${minutes(elapsed / fraction - elapsed)} left`
@@ -239,10 +242,19 @@ async function convert() {
       });
       partial.delete(job);
       if (result.type === 'done') {
-        await sink.add(job.bits, job.name.replace(/\.MPG$/i, '.DLC'), result.bytes);
-        entries[job.bits][job.index] = result.entry;
+        // Converted: counted at once. Its file then waits its turn (a card
+        // can be slower than the workers), the worker with it, its bar
+        // full and dimmed meanwhile.
         doneBytes += job.size;
         finished++;
+        writing++;
+        fill.style.width = '100%';
+        line.classList.add('writing');
+        render();
+        await sink.add(job.bits, job.name.replace(/\.MPG$/i, '.DLC'), result.bytes);
+        writing--;
+        line.classList.remove('writing');
+        entries[job.bits][job.index] = result.entry;
       } else {
         failures.push(`${job.name} ${SET_NAMES[job.bits]} (${result.error})`);
       }
@@ -255,6 +267,7 @@ async function convert() {
   try {
     await Promise.all(workers.map((w, i) => work(w, lines[i])));
     if (!running) return;  // stopped
+    $('progress-title').textContent = 'Writing the last files';
     // Each complete set's manifest, last.
     const complete = [];
     for (const bits of sets) {
