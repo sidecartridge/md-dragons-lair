@@ -72,9 +72,9 @@ and needs `--force`, because it is a factory reset (reset_deviceAndEraseFlash).
 name: esc, return, space, up, down, left, right, 1-0, a-z, f1-f10...) is pressed and
 released, and the bytes enter where the ST's own do, so the app cannot tell
 the difference. `app` sends a command named by a DEVHOOKS_APP_<NAME> define in
-rp/src/include, with optional 16-bit words: the demo dispatcher has `demo N`,
-`menu`, `overlay 0|1`, `slow_frame MS`, `input_mode 0-3`, `ikbd_cmd BYTE...`,
-`audio_out 0|1`, `tone HZ` and `copy_mode 0-2 [PIECE]` (demo.h).
+rp/src/include, with optional 16-bit words: the bench has `read_test`,
+`list_top N`, `slideshow N`, `in_place N [1]`, `sound N [1]` and `write_test`
+(bench.h).
 
 `stopwatch` (debug builds, with TIME_STUDY = 1 in userfw.s) reads the ST's
 stopwatch points for a few seconds: the VBL's period, when the loop wakes, when
@@ -574,7 +574,9 @@ def grab_frames(elf: str, count: int, now: bool,
     counter = base + defs["CART_FB_FRAME_COUNTER_OFFSET"]
     fb = base + defs["CART_FRAMEBUFFER_OFFSET"]
     fb_size = defs["CART_FRAMEBUFFER_SIZE"]
-    pal = base + defs["CART_PALETTE_OFFSET"]
+    # The frame's palette, written with it: the one the ST shows it with (the
+    # palette now may be another, as while a clip plays).
+    pal = base + defs["CART_FRAME_PALETTE_OFFSET"]
     pal_size = defs["CART_PALETTE_SIZE"]
     with tempfile.TemporaryDirectory() as tmp:
         cmds = [] if now else ["halt", f"wp 0x{counter:08x} 4 w"]

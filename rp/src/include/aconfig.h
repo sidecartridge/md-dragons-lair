@@ -14,7 +14,24 @@
 #include "settings.h"
 
 #define ACONFIG_PARAM_FOLDER "FOLDER"
+// The app's folder on the SD card, created at boot when it is missing. The
+// app uses this name; FOLDER only records it (the dev UUID's sector may hold
+// another app's value).
+#define APP_FOLDER "/DLAIR"
 #define ACONFIG_PARAM_MODE "MODE"
+
+// The clip player's volume in dB (3 dB steps), one for each output: the YM
+// sounds quieter at the DMA chip's level and plays only 6 bits.
+#define ACONFIG_PARAM_VOLUME_YM "VOLUME_YM"
+#define ACONFIG_PARAM_VOLUME_DMA "VOLUME_DMA"
+// The game's options (gameui.h's GAMEUI_OPT_* bits), starting lives, the
+// scene to start at (its DirkSimple name, empty for the start) and the high
+// scores, five a setting ("DRK0300000" each: initials, then the score).
+#define ACONFIG_PARAM_GAME_OPTIONS "GAME_OPTIONS"
+#define ACONFIG_PARAM_GAME_LIVES "GAME_LIVES"
+#define ACONFIG_PARAM_GAME_START "GAME_START"
+#define ACONFIG_PARAM_HISCORES1 "HISCORES1"
+#define ACONFIG_PARAM_HISCORES2 "HISCORES2"
 
 #define ACONFIG_SUCCESS 0
 #define ACONFIG_INIT_ERROR -1

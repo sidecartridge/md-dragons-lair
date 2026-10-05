@@ -54,6 +54,9 @@
 ; $78000.
 VIDEO_BASE_ADDR_HIGH  equ $FFFF8201
 VIDEO_BASE_ADDR_MID   equ $FFFF8203
+; The video address counter's mid byte: reloaded from the base at each VBL
+; and still there in the vertical blank, before the first line is shown.
+VIDEO_COUNT_MID       equ $FFFF8207
 
 ; Palette index 0 doubles as the border colour. We poke it at three
 ; points in the VBL loop so the ST border visualises blit timing
@@ -100,13 +103,12 @@ STUDY_POINT macro
     endc
     endm
 
-; Per-VBL state area at the end of SCREEN_A's 32 KB allocation.
-; Used by FBDRV_INLINE to spill A7 (SP) around the MOVEM-burst that
-; includes A7 in its register list; the current-page pointer
-; UFW_SCREEN_PAGE and the saved TOS VBL vector / Physbase result
-; also live here. 20 bytes used; SCREEN_A's tail at $77D00 has 768
-; bytes available (shifter only reads 200*160 = 32000 B of each
-; screen page, allocation is 32 KB).
+; Per-VBL state area at the end of SCREEN_A's 32 KB allocation
+; ($77F00-$77FFF): the reset stub, the current-page pointer
+; UFW_SCREEN_PAGE, the saved TOS VBL vector / Physbase result and the
+; words below live here. SCREEN_A's tail from $77D00 has 768 bytes
+; available (shifter only reads 200*160 = 32000 B of each screen
+; page, allocation is 32 KB).
 ; UFW_RESET_STUB: .cold_reset copies userfw_reset_stub here and runs it,
 ; so the ST's last instructions before its cold reset come from RAM.
 UFW_RESET_STUB        equ $00077F00          ; up to $77F7F
@@ -129,6 +131,16 @@ UFW_VBL_COUNT         equ $00077F90          ; word
 UFW_FRAME_VBL         equ $00077F92          ; word
 ; The stopwatch's wraps (TIME_STUDY).
 UFW_SW_WRAPS          equ $00077F94          ; word
+; The palettes (see PALETTE_ADDR). TOS's, saved at boot and put back on the
+; way to GEM. The frame's, copied with the frame before the ack, and the
+; page that shows it: $8000 + that page's video base mid byte while
+; userfw_vbl has still to put it in the shifter, 0 once it has. The
+; generation of the palette now last put in the shifter ($FFFF at boot:
+; every generation the RP completes has bit 15 clear).
+UFW_TOS_PALETTE       equ $00077F96          ; 32 bytes
+UFW_FRAME_PALETTE     equ $00077FB6          ; 32 bytes
+UFW_PALETTE_PENDING   equ $00077FD6          ; word
+UFW_PALETTE_GEN       equ $00077FD8          ; word
 UFW_VBL_VEC_SAVE      equ $00077FE0          ; longword: TOS VBL vector ($70)
 UFW_PHYSBASE_SAVE     equ $00077FE8          ; longword: XBIOS Physbase result
 UFW_SCREEN_PAGE       equ $00077FEC          ; longword: current draw page address
@@ -157,17 +169,18 @@ UFW_IKBD_COUNT        equ $00077FFA          ; word
 ; framebuffer constants); change FB_COPY_LINES in one place to
 ; throttle how many ST scanlines the per-VBL copy touches.
 ;
-; FBDRV_TOTAL_BYTES must be divisible by FBDRV_ITER_BYTES (48) so
-; the unrolled REPT covers the full byte count without a tail.
+; FBDRV_TOTAL_BYTES need not be divisible by FBDRV_ITER_BYTES (48):
+; the unrolled REPT covers the whole iterations and the tail block at
+; the end of FBDRV_INLINE copies the remainder.
 ; FB_COPY_LINES * 160 byte rows / 48 byte iters: 150*160/48=500,
-; 200*160/48=666r32. For values that don't divide evenly the trailing
-; bytes are simply not copied (they remain stale on the screen page).
+; 200*160/48=666r32. The tail's register list is set by hand (see
+; the macro).
 FBDRV_ITER_BYTES      equ 48                            ; 12 longwords: D0-D7 + A1-A4 (A6=src, A5=dst, A0=dedicated audio pointer, A7=SP preserved -- IRQs may fire during the macro).
 FBDRV_TOTAL_BYTES     equ (FB_COPY_LINES * FB_ROW_BYTES) ; honours FB_COPY_LINES
 FBDRV_MAIN_ITERS      equ (FBDRV_TOTAL_BYTES / FBDRV_ITER_BYTES)
 FBDRV_MAIN_BYTES      equ (FBDRV_MAIN_ITERS * FBDRV_ITER_BYTES)
-FBDRV_TAIL_BYTES      equ (FBDRV_TOTAL_BYTES - FBDRV_MAIN_BYTES)  ; 20 bytes at FB_COPY_LINES=200 (= 5 longwords)
-FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at page_start + FBDRV_MAIN_BYTES (= 31980)
+FBDRV_TAIL_BYTES      equ (FBDRV_TOTAL_BYTES - FBDRV_MAIN_BYTES)  ; 32 bytes at FB_COPY_LINES=200 (= 8 longwords)
+FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at page_start + FBDRV_MAIN_BYTES (= 31968)
 
 ;----------------------------------------------------------------
 ; FBDRV_INLINE -- fully unrolled cart->ST screen framebuffer copy.
@@ -187,9 +200,9 @@ FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at
 ; A1-A4 hold pixels: every handler saves what it uses (A0 aside).
 ;
 ; Predec mode is 4 cyc faster per iter than d16(a5) displacement
-; (8+8n vs 12+8n on 68000). The catch: predec writes each 52-byte
+; (8+8n vs 12+8n on 68000). The catch: predec writes each 48-byte
 ; chunk into the destination ST page in REVERSE order relative to
-; the source -- chunks land from the screen-page END (offset 31980)
+; the source -- chunks land from the screen-page END (offset 31968)
 ; down to the START (offset 0). For the displayed image to look
 ; correct, the RP-side fb_chunky_to_planar pre-reverses chunks in
 ; the cart FB at $FA8300, so the m68k's reversal restores the
@@ -198,7 +211,7 @@ FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at
 ;
 ; Caller protocol (must be set up BEFORE the macro expansion):
 ;   A5 = destination ST screen page END
-;        ($70000 + 31980 or $78000 + 31980; .vbl_loop adds the
+;        ($70000 + 31968 or $78000 + 31968; .vbl_loop adds the
 ;        FBDRV_MAIN_ITERS * FBDRV_ITER_BYTES offset via LEA after
 ;        loading UFW_SCREEN_PAGE).
 ;
@@ -208,8 +221,8 @@ FBDRV_TAIL_DISP       equ FBDRV_MAIN_BYTES                        ; tail goes at
 ; A5 = original SCREEN_PAGE end - (FBDRV_MAIN_ITERS * FBDRV_ITER_BYTES)
 ; = original page START, which is the value .after_copy expects in A5.
 ;
-; Code size: 8 B per unrolled iteration * FBDRV_MAIN_ITERS (615)
-; + 6 B setup = ~5 KB inline, plus the small d16(a5) tail MOVEM at
+; Code size: 8 B per unrolled iteration * FBDRV_MAIN_ITERS (666)
+; + 6 B setup = ~5.3 KB inline, plus the small d16(a5) tail MOVEM at
 ; the end.
 FBDRV_INLINE          macro
     movea.l #FRAMEBUFFER_ADDR, a6
@@ -572,6 +585,18 @@ userfw:
     lea     ST_FEATURES_WINDOW, a0
     tst.b   (a0, d1.w)
 
+    ; TOS's palette, for the way back to GEM; no frame's palette pending
+    ; and none of the RP's palettes in the shifter yet (see
+    ; UFW_PALETTE_PENDING), before userfw_vbl can look at them.
+    lea     PALETTE_BASE.w, a1
+    lea     UFW_TOS_PALETTE, a2
+    moveq   #(PALETTE_SIZE / 4) - 1, d0
+.save_tos_palette:
+    move.l  (a1)+, (a2)+
+    dbf     d0, .save_tos_palette
+    clr.w   UFW_PALETTE_PENDING
+    move.w  #-1, UFW_PALETTE_GEN
+
     ; Save TOS's VBL vector and install ours. We're in supervisor mode
     ; (entered via CA_INIT) so writing $70.w is legal.
     move.l  VBL_VECTOR.w, UFW_VBL_VEC_SAVE   ; TOS VBL vector saved in RAM
@@ -915,16 +940,24 @@ userfw:
     dbf     d2, .dma_copy
 .dma_done:
 
-    ; Publish RP-supplied palette to the shifter. 16 words
-    ; from PALETTE_ADDR -> $FFFF8240..$FFFF825E via two MOVEMs.
-    ; Cost: 76 (load) + 72 (store) + 16 (lea) = ~164 cyc / VBL =
-    ; ~20 us. Apps that don't want RP-driven palette can leave the
-    ; cart slot zero (= all-black screen, since the m68k still
-    ; publishes it every frame) -- swap the load EA below for
-    ; their own palette source if needed.
-    lea     PALETTE_ADDR, a5
-    movem.l (a5), d0-d7
-    movem.l d0-d7, PALETTE_BASE.w
+    ; The palette now (PALETTE_ADDR), into the shifter at the VBL after its
+    ; generation (PALETTE_GEN_ADDR) changed: not while the RP writes it
+    ; (busy bit), and only when the generation read after the palette is
+    ; the one read before (else the next VBL tries again). About 25 us when
+    ; it changed, 4 us when not. A frame's own palette goes in with the
+    ; frame (UFW_FRAME_PALETTE, see userfw_vbl).
+    move.w  PALETTE_GEN_ADDR, d0
+    cmp.w   UFW_PALETTE_GEN, d0
+    beq.s   .palette_done
+    btst    #PALETTE_GEN_BUSY_BIT, d0
+    bne.s   .palette_done
+    lea     PALETTE_ADDR, a1
+    movem.l (a1), d1-d7/a2
+    cmp.w   PALETTE_GEN_ADDR, d0
+    bne.s   .palette_done
+    movem.l d1-d7/a2, PALETTE_BASE.w
+    move.w  d0, UFW_PALETTE_GEN
+.palette_done:
 
     ; Blit only a frame the RP has finished publishing, and only once
     ; (see FB_FRAME_COUNTER_ADDR), and no sooner than the profile's VBLs a
@@ -1051,7 +1084,21 @@ userfw:
     ; +2 of the longword is exactly the MID byte (bits 8..15) we need
     ; to write to VIDEO_BASE_ADDR_MID. Read it straight from memory
     ; instead of recomputing via lsr/move chain from A5.
+    ;
+    ; The frame's palette goes with it: copied here, before the ack (after
+    ; it the RP may write the next frame's), and put in the shifter by
+    ; userfw_vbl at the VBL that shows this page. The VBL is masked from
+    ; the flip to the flag (Timer-B and the ACIA still run).
+    lea     FRAME_PALETTE_ADDR, a1
+    movem.l (a1), d0-d7
+    movem.l d0-d7, UFW_FRAME_PALETTE
+    moveq   #0, d0
+    move.b  UFW_SCREEN_PAGE+2, d0
+    or.w    #$8000, d0
+    move.w  #$2400, sr
     move.b  UFW_SCREEN_PAGE+2, VIDEO_BASE_ADDR_MID.w
+    move.w  d0, UFW_PALETTE_PENDING
+    move.w  #$2300, sr
 
     ; Toggle UFW_SCREEN_PAGE between SCREEN_A and SCREEN_B for the
     ; next frame.
@@ -1158,6 +1205,10 @@ userfw:
     ; Restore TOS's VBL vector ($70 save from UFW_VBL_VEC_SAVE).
     move.l  UFW_VBL_VEC_SAVE, VBL_VECTOR.w
 
+    ; And TOS's palette (saved at boot).
+    movem.l UFW_TOS_PALETTE, d0-d7
+    movem.l d0-d7, PALETTE_BASE.w
+
     ; Give TOS its mouse and joysticks back (see IKBD_CMD_RESET_HDR).
     IKBD_SEND IKBD_CMD_JOY_EVENTS
     IKBD_SEND IKBD_CMD_MOUSE_REL
@@ -1252,6 +1303,25 @@ userfw_vbl:
     lsl.w   #AUDIO_SLICE_SHIFT-8, d0      ; shifts 8 bits at most
     movea.l #AUDIO_BUFFER_ADDR, a0
     adda.w  d0, a0
+    ; The frame's palette (UFW_FRAME_PALETTE), at the VBL that shows its
+    ; page: the video counter, reloaded from the base at this VBL, points
+    ; at it. A flip that came too late for this VBL shows at the next one,
+    ; and so does its palette. Timer-B and the ACIA run meanwhile (A0 is on
+    ; its slice); about 30 us, once a frame.
+    move.w  UFW_PALETTE_PENDING, d0
+    beq.s   .vbl_palette_done
+    cmp.b   VIDEO_COUNT_MID.w, d0
+    bne.s   .vbl_palette_done
+    move.w  #$2500, sr
+    movem.l a1-a2, -(sp)
+    lea     UFW_FRAME_PALETTE, a1
+    lea     PALETTE_BASE.w, a2
+    rept    PALETTE_SIZE / 4
+    move.l  (a1)+, (a2)+
+    endr
+    movem.l (sp)+, a1-a2
+    clr.w   UFW_PALETTE_PENDING
+.vbl_palette_done:
     move.l  (sp)+, d0
     clr.w   UFW_VBL_FLAG
     rte

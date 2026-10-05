@@ -1,10 +1,11 @@
 {
   "uuid": "<APP_UUID>",
-  "name": "APP DEV Template",
-  "description": "Microfirmware Application Template for Atari ST",
-  "image": "https://placehold.co/256x256/png",
+  "name": "Dragon's Lair",
+  "description": "1983: a laserdisc, Don Bluth's hand-drawn cartoon and two quarters a go. Now Dirk the Daring braves the dragon's lair to rescue Princess Daphne on your Atari ST, STE, Mega ST or Mega STE, sound and all, from your own Dragon's Lair CD-ROM. <a target='_blank' href='https://docs.sidecartridge.com/sidecartridge-multidevice/microfirmwares/dragons-lair/'>Learn more</a>",
+  "image": "https://raw.githubusercontent.com/sidecartridge/md-dragons-lair/main/icon.png",
   "tags": [
-    "Sample",
+    "Game",
+    "Laserdisc"
   ],
   "devices": [
     "ST",

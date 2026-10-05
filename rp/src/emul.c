@@ -20,21 +20,18 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "aconfig.h"
 #include "audio.h"
+#include "bench.h"
 #include "commemul.h"
 #include "debug.h"
-#include "demo.h"
 #include "devhooks.h"
 #include "fb.h"
-#include "ff.h"
 #include "ikbd.h"
 #include "memfunc.h"
 #include "palette.h"
 #include "pico/stdlib.h"
 #include "reset.h"
 #include "romemul.h"
-#include "sdcard.h"
 #include "select.h"
 #include "st_session.h"
 #include "target_firmware.h"
@@ -45,6 +42,18 @@
  * rate it wants; the m68k decides per VBL whether the new content is
  * worth copying. Apps that need a fixed cadence can add their own
  * sleep_ms / sleep_until call here. */
+
+// SELECT's restarts, with the SD card left idle first: a restart during its
+// writes leaves it unanswering until it loses power (bench_stop_card_work()).
+static void select_reset(void) {
+  bench_stop_card_work();
+  reset_device();
+}
+
+static void select_long_reset(void) {
+  bench_stop_card_work();
+  reset_deviceAndEraseFlash();
+}
 
 void emul_start() {
   // RP2040 RAM is undefined at power-on; firmware.py only emits the
@@ -77,10 +86,6 @@ void emul_start() {
   }
 #endif
 
-  // Reset the IKBD ring (init order before commemul_init is fine since
-  // the producer side runs from the main loop, not from an IRQ).
-  ikbd_init();
-
   // Initialise the cartridge ROM4 read engine. ROM4 reads are served
   // entirely by chained DMAs feeding the PIO TX FIFO -- no CPU/IRQ
   // involvement. IKBD ingest is on ROM3 + commemul ring (see main
@@ -98,6 +103,11 @@ void emul_start() {
   if (commemul_init() < 0) {
     panic("commemul_init failed: PIO/DMA claim or program load returned <0");
   }
+
+  // The ROM3 ring's consumer (the template's command handler): the IKBD
+  // samples, kept in order. fb_init()'s first publish already drains the
+  // ring. It also writes the keyboard-only input mode into the window.
+  ikbd_init();
 
   // Initialise the 32 KB low-res framebuffer (320x200, 4 bpp). Sets
   // up `fb_screen` for the font/draw primitives, clears the FB to
@@ -118,54 +128,38 @@ void emul_start() {
   // Initialise the cart audio buffer producer (see audio.h). The
   // m68k Timer-B IRQ in userfw.s consumes the buffer at ~5,585 Hz
   // (2 B/sample dual-channel mode). audio_init() leaves the buffer
-  // silent until a callback is installed; the playback source is
-  // chosen below, after the SD card has had a chance to mount.
+  // silent until a callback is installed.
   audio_init();
 
-  // SD card -- best-effort. Apps that need persistent storage can
-  // ignore the failure path or treat it as fatal. The folder name is
-  // taken from per-app config (ACONFIG_PARAM_FOLDER) so apps can be
-  // reconfigured from Booster without recompiling.
-  // Static, not on core 0's stack: the FATFS object is about 600 bytes and
-  // f_mount keeps a pointer to it for as long as the card is used.
-  static FATFS fsys;
-  SettingsConfigEntry *folder =
-      settings_find_entry(aconfig_getContext(), ACONFIG_PARAM_FOLDER);
-  const char *folderName = folder ? folder->value : "/test";
-  if (sdcard_initFilesystem(&fsys, folderName) != SDCARD_INIT_OK) {
-    DPRINTF("SD card unavailable. Continuing without SD.\n");
-  }
+  // The bench screen: the CD-ROM image in BENCH_FOLDER, listed and read
+  // (bench.h). ESC keeps ikbd.c's default: back to GEM.
+  bench_init();
 
-  // Cartridge SELECT button, configured in main() (held at power-on it goes
-  // to Booster). While the app runs, as md-microfirmware-template: a short
-  // press restarts the RP, a press held 10 s is a factory reset (the global
-  // settings are erased and Booster then clears every app's settings).
-  // select_poll() in the main loop runs them; it never blocks.
-  select_setResetCallback(reset_device);
-  select_setLongResetCallback(reset_deviceAndEraseFlash);
+  // Cartridge SELECT button, as md-microfirmware-template, in its place in
+  // the start-up: a short press restarts the RP, a press held 10 s is a
+  // factory reset (the global settings are erased and Booster then clears
+  // every app's settings). select_poll() in the main loop runs them; it
+  // never blocks.
+  select_configure();
+  select_setResetCallback(select_reset);
+  select_setLongResetCallback(select_long_reset);
 
-  // Bring up the demo dispatcher. demo_dispatcher_init takes
-  // ownership of the ESC key from ikbd.c (ESC now means "back to
-  // menu" inside a demo and "exit to GEM" only when the menu is on
-  // screen) and starts the menu's music (demo_menu_music(): DEMO.YMS
-  // from the SD card, else the built-in jingle; apps play their own with
-  // audio_play_yms_file(), audio_play_loop(), audio_set_pcm_callback()).
-  // The first dispatcher render paints the boot menu over whatever
-  // fb_init left in the framebuffer.
-  demo_dispatcher_init();
+  // The SD card, where md-microfirmware-template starts it: mounted, the
+  // app's folder created when it is missing, the image found and its root
+  // directory read.
+  bench_start_sd();
+
   // Debug builds: host commands over SWD (devhooks.h, tools/dev/swd.py).
-  devhooks_setAppHandler(demo_dispatcher_devhook);
+  devhooks_setAppHandler(bench_devhook);
 
   // Main loop:
   //   1. Drain the ROM3 commemul ring; ikbd_consume_rom3_sample keeps the
   //      IKBD samples (every byte the m68k ACIA interrupt forwarded, the
   //      ST's byte counts, overruns and input mode reports) in order.
   //   2. Decode them: keys, mouse and joysticks (ikbd_pump).
-  //   3. Forward decoded key events to the dispatcher (which routes
-  //      to the menu or the active demo).
-  //   4. Re-render the cart framebuffer via the dispatcher (menu UI
-  //      or active demo's render_frame). The m68k VBL loop in
-  //      userfw.s blits this into an ST screen page once per VBL.
+  //   3. Forward decoded key events to the bench.
+  //   4. Run a slice of the bench's work, or draw and publish its screen.
+  //      The m68k VBL loop in userfw.s blits it into an ST screen page.
   DPRINTF("Entering main loop\n");
   while (true) {
     fb_pump_rom3();  /* drains ROM3 ring -> IKBD demux + VBL frame-sync */
@@ -175,15 +169,15 @@ void emul_start() {
 
     /* The ST rebooted: start its session over (see st_session.h). */
     if (st_session_consume_boot()) {
-      demo_dispatcher_restart();
+      bench_restart();
     }
 
     ikbd_key_event_t k;
     while (ikbd_pop_key(&k)) {
-      demo_dispatcher_handle_key(&k);
+      bench_handle_key(&k);
     }
 
-    demo_dispatcher_render_frame();
+    bench_frame();
     audio_render_frame();
   }
 }

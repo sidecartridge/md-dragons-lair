@@ -17,9 +17,9 @@
 #
 # A build of another CMake type than Release (-DCMAKE_TYPE=MinSizeRel, for
 # RP_CMAKE_BUILD_TYPE) appends its type (+minsizerel; CMake Debug is
-# +cmakedebug), a 25 fps build (-DAPP_PROFILE=PROFILE_25FPS) +25fps and a
-# debug build (-DDEBUG_BUILD=1) +debug to any of these, so the ID in flash
-# tells the builds of one tree apart.
+# +cmakedebug), a 50 fps build (-DAPP_PROFILE=PROFILE_50FPS; this app's
+# profile is 25 fps) +50fps and a debug build (-DDEBUG_BUILD=1) +debug to any
+# of these, so the ID in flash tells the builds of one tree apart.
 #
 # Inputs: -DSRC_DIR=<rp/src> -DOUT_DIR=<folder for build_id.h and build_id.c>
 #         -DDEBUG_BUILD=<0|1> -DCMAKE_TYPE=<CMake build type>
@@ -64,8 +64,8 @@ endif()
 if(NOT CMAKE_TYPE_TAG STREQUAL "" AND NOT CMAKE_TYPE_TAG STREQUAL "release")
   set(BUILD_ID "${BUILD_ID}+${CMAKE_TYPE_TAG}")
 endif()
-if(APP_PROFILE STREQUAL "PROFILE_25FPS")
-  set(BUILD_ID "${BUILD_ID}+25fps")
+if(APP_PROFILE STREQUAL "PROFILE_50FPS")
+  set(BUILD_ID "${BUILD_ID}+50fps")
 endif()
 if(DEBUG_BUILD)
   set(BUILD_ID "${BUILD_ID}+debug")

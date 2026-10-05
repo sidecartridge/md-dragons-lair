@@ -14,6 +14,17 @@ env:
   STCMD_NO_TTY: 1
 
 jobs:
+  # The converter in WebAssembly (web/build.sh, Emscripten pinned there): the
+  # converter's host test, run in Node, must give the native build's CRC-32.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the code
+      uses: actions/checkout@v4
+
+    - name: The web converter and its test
+      run: web/build.sh test
+
   build:
     runs-on: ubuntu-latest
     strategy:

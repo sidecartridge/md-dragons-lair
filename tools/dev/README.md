@@ -26,8 +26,8 @@ Python tools use the standard library only.
 - `stopwatch [--seconds S]` (debug builds, `TIME_STUDY = 1` in `userfw.s`): the VBL's period,
   when the ST's loop wakes, starts and ends a frame's copy and goes idle, each after its VBL,
   the copy's length and the frames a second, in microseconds (4.07 µs ticks of MFP Timer-A on
-  one timeline). A 25 fps build (`APP_PROFILE=PROFILE_25FPS tools/dev/flash.sh debug`) builds in
-  its own folder and its ID ends in `+25fps`.
+  one timeline). The app plays at 25 fps; a 50 fps build (`APP_PROFILE=PROFILE_50FPS
+  tools/dev/flash.sh debug`) builds in its own folder and its ID ends in `+50fps`.
 - Debug builds carry the devhooks mailbox (`rp/src/include/devhooks.h`, included once from
   `emul.c`, served by `devhooks_poll()` in the main loop), which `key` and `app` write.
 
@@ -116,7 +116,7 @@ python3 tools/dev/swd.py shared                                  # the window's 
 python3 tools/dev/swd.py fb screen.png                           # what the ST shows, as a PNG
 python3 tools/dev/swd.py fb frame.png --pair --raw               # two consecutive frames + planar bytes
 python3 tools/dev/swd.py key down down return                    # type on the ST's keyboard (debug)
-python3 tools/dev/swd.py app demo 3                              # a demo dispatcher command (debug)
+python3 tools/dev/swd.py app slideshow 0                         # a bench command (debug)
 python3 tools/dev/swd.py select short                            # press SELECT: the RP restarts
 python3 tools/dev/swd.py crash                                   # why did it last reboot?
 python3 tools/dev/swd.py postmortem                              # halt, backtraces, resume
@@ -166,27 +166,23 @@ keyboard: each key, a scancode (`0x02`) or a name (`esc`, `return`, `space`, `up
 `right`, `1`-`0`, `a`-`z`, `f1`-`f10`...), is pressed and released (`--press` / `--release` for one
 half), and its bytes enter with the ST's own (outside the ST's byte count), so the app cannot tell
 the difference. `app NAME [WORD]`
-runs the command defined as `DEVHOOKS_APP_<NAME>` in `rp/src/include`; the demo dispatcher
-(`demo.h`, `demo_dispatcher_devhook()`) has:
+runs the command defined as `DEVHOOKS_APP_<NAME>` in `rp/src/include`; the bench (`bench.h`,
+`bench_devhook()`) has:
 
-- `demo N`: launch menu entry N (1-4 the demos, 5 the input test, 6 Arena, 7 Zap); `menu`: back
-  to the menu. In debug builds Arena takes knobs as keys, for scripts: `key 0x4E` / `key 0x4A`
-  (keypad + / -) add or remove an enemy, `key s` doubles their size, `key f` freezes the game,
-  `key r` / `key a` redraw the arena once / every second.
-- `overlay 0|1`: the DRAW/C2P readout (the hidden `D` key).
-- `slow_frame MS`: every frame takes MS milliseconds longer (0 stops it): an app late with its
-  frames, on demand. The sound and the publish handshake must survive it.
-- `input_mode N`: the input mode (0 keyboard, 1 mouse, 2 mouse + joystick 1, 3 joysticks), in any
-  demo.
-- `ikbd_cmd BYTE...`: IKBD command bytes (at most 12; `0` waits a VBL), sent by the ST one per
-  VBL: to try what an IKBD does, e.g. `ikbd_cmd 0x16` asks for both sticks' state.
-- `audio_out 0|1`: from the ST's next boot, the DMA chip where there is one (0) or the YM (1):
-  both outputs on one STE with a reset in between.
-- `tone HZ`: a sine through the PCM path, whose clicks are easy to hear; `tone 0` goes back to
-  `DEMO.YMS`.
-- `copy_mode MODE [PIECE]`: who copies the frame on the ST, from its next VBL (0 auto: the
-  blitter on the DMA sound path; 1 the CPU; 2 the blitter), and the blitter's chunks per piece
-  (0: 40). With the stopwatch on, the slack histogram shows what each one leaves.
+- `read_test`: the card's read rates (four chunk sizes, two clocks) and a clip's CRC-32.
+- `list_top N`: the image's listing from entry N.
+- `slideshow N`: scene clip N's intra pictures, converted and shown (no word: back).
+- `in_place N [1]`: scene clip N's I and P pictures decoded in place, a CRC-32 each (1: the IDCT
+  and motion compensation timed too; no word: back).
+- `sound N [1]`: scene clip N's sound decoded and timed (1: played; no word: stopped).
+- `write_test`: the card's write rate (a 2 MB scratch file in the folder, deleted after).
+- `game`: the game, or back to the bench from it.
+- `game_bot MS [1]`: a game played by a bot through the IKBD decoder, each move pressed MS into its
+  window on the keyboard (1: the stick in port 1), with infinite lives; every press, death and the
+  game's summary on the console (no word: stopped).
+
+The SD card starts before the main loop: after a flash, wait for the console's `Root:` line before
+sending one.
 
 An app adds its own the same way: a `DEVHOOKS_APP_<NAME>` define and a handler set with
 `devhooks_setAppHandler()`.
@@ -231,9 +227,9 @@ python3 tools/dev/tools_harness.py --build --flash --reset   # every tool above,
 ```
 
 Runs every tool against a debug build on the RP and prints PASS or FAIL for each check: the running
-firmware and its build ID, the console, `counters`, `heap`, `shared`, the mailbox (`key` into a
-demo and back, `app demo`), `fb` and `fb --pair`, `slow_frame` (the publish rate drops and comes
-back), `crash`, `postmortem` (and that the app runs on after it) and a SELECT press, which restarts
+firmware and its build ID, the console, `counters`, `heap`, `shared`, the mailbox (`key`, and
+`app list_top 0` to the bench), `fb` and `fb --pair`, `crash`, `postmortem` (and that the app
+runs on after it) and a SELECT press, which restarts
 the RP. `--build` also builds both types and checks their flags and symbols, `--flash` flashes the
 debug build first, and `--reset` restarts the RP at the end and checks core 1 is alive. It needs
 `console.py watch` running (it reads its log, never the UART), not the ST. It writes a JSON report
@@ -245,6 +241,6 @@ to `logs/` and exits 0 only when every check passes.
   `-fcallgraph-info=su`, and reports the flash and RAM sections and the heap's room.
 - `stackdepth.py BUILD_DIR roots main fb_core1_loop fb_c2p_bottom_job` computes the worst-case
   stack depth below each function from those builds (static call edges only, so treat its answer
-  as a floor: core 1's jobs and the demos' function pointers are called indirectly).
+  as a floor: core 1's jobs and the run2 jobs are called indirectly).
 
 `logs/` and `builds/` are generated here and are gitignored.

@@ -97,11 +97,15 @@ if (NOT DEFINED ENV{PICO_MALLOC_PANIC})
 endif()
 add_compile_definitions(PICO_MALLOC_PANIC=$ENV{PICO_MALLOC_PANIC})
 
-# The app's profile (include/profile.h): PROFILE_50FPS, the default, or
-# PROFILE_25FPS, from the environment (APP_PROFILE=PROFILE_25FPS ./build.sh).
-if (DEFINED ENV{APP_PROFILE})
-    add_compile_definitions(APP_PROFILE=$ENV{APP_PROFILE})
+# The app's profile (include/profile.h): 25 frames a second with the richer
+# sound (PROFILE_25FPS), unless the environment says otherwise
+# (APP_PROFILE=PROFILE_50FPS ./build.sh).
+if (DEFINED ENV{APP_PROFILE} AND NOT "$ENV{APP_PROFILE}" STREQUAL "")
+    set(APP_PROFILE $ENV{APP_PROFILE})
+else()
+    set(APP_PROFILE PROFILE_25FPS)
 endif()
+add_compile_definitions(APP_PROFILE=${APP_PROFILE})
 
 # Creates a pico-sdk subdirectory in our project for the libraries
 pico_sdk_init()
@@ -122,7 +126,14 @@ pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/commemul.pio)
 target_sources(${PROJECT_NAME} PRIVATE
         aconfig.c
         audio.c
+        bench.c
+        cadence.c
+        clip.c
+        clipplay.c
         commemul.c
+        convert.c
+        convjob.c
+        crc32.c
         emul.c
         fb.c
         fb_blit.c
@@ -130,21 +141,24 @@ target_sources(${PROJECT_NAME} PRIVATE
         fb_chunked.c
         fb_chunked_asm.S
         fb_font.c
+        game.c
+        gameui.c
+        game_table.c
         gconfig.c
         ikbd.c
         ikbd_demux.c
         hw_config.c
+        iso9660.c
+        manifest.c
+        mp2_audio.c
+        mpeg1_idct_asm.S
+        mpeg1_video.c
+        mpeg_ps.c
         palette.c
-        demo_menu.c
-        demo_parallax.c
-        demo_3d.c
-        demo_sprites.c
-        demo_cojorotozoom.c
-        demo_input.c
-        demo_games.c
-        game_kit.c
-        game_arena.c
-        game_zap.c
+        player.c
+        qrcodegen.c
+        picture16.c
+        picture16_asm.S
         reset.c
         romemul.c
         sdcard.c
@@ -159,7 +173,6 @@ pico_add_extra_outputs(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LINK_LIBRARIES}        # External or additional libraries passed as variables
     hardware_flash           # Flash memory access
-    hardware_interp          # SIO interpolators (cojorotozoom texel addressing)
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico                # FATFS library
     pico_stdlib              # Core functionality
     pico_multicore          # Multicore support
@@ -310,13 +323,13 @@ target_link_options(${PROJECT_NAME} PRIVATE "-Wl,--gc-sections")
 # rewritten only when the ID changes, so only their users recompile. The symbol
 # is kept through --gc-sections so the SWD tools can read it from flash. A
 # debug build's ID ends in +debug, a build of another CMake type than
-# Release carries that type and a 25 fps build (APP_PROFILE) +25fps, so builds
+# Release carries that type and a 50 fps build (APP_PROFILE) +50fps, so builds
 # of one tree cannot be taken for each other on the device.
 set(BUILD_ID_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id)
 add_custom_target(build_id
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${CMAKE_CURRENT_LIST_DIR}
             -DOUT_DIR=${BUILD_ID_DIR} -DDEBUG_BUILD=${_DEBUG}
-            -DCMAKE_TYPE=${CMAKE_BUILD_TYPE} -DAPP_PROFILE=$ENV{APP_PROFILE}
+            -DCMAKE_TYPE=${CMAKE_BUILD_TYPE} -DAPP_PROFILE=${APP_PROFILE}
             -P ${CMAKE_CURRENT_LIST_DIR}/build_id.cmake
     BYPRODUCTS ${BUILD_ID_DIR}/build_id.h ${BUILD_ID_DIR}/build_id.c
     COMMENT "Checking the build ID")

@@ -50,13 +50,18 @@ void fb_chunked_init(void);
  * so data prepared before dispatch is visible to the job and the job's
  * writes are visible after wait. Each dispatch MUST be paired with one
  * wait before the next dispatch (the c2p in fb_transpose uses this too,
- * so demos must join their own job before fb_publish). */
+ * so an app must join its own job before fb_publish). */
 typedef void (*fb_core1_job_t)(void *arg);
 void __not_in_flash_func(fb_core1_dispatch)(fb_core1_job_t job, void *arg);
 void __not_in_flash_func(fb_core1_wait)(void);
 
 /* Fill the entire chunked buffer with a single palette index. */
 void fb_chunked_clear(uint8_t color);
+
+/* The publish's 32,000-byte planar scratch (4-byte aligned). fb_publish()
+ * is its only user: between two publishes an app may borrow it, as long as
+ * it does not publish while it holds it. */
+uint8_t *fb_chunked_scratch(void);
 
 /* Bounds-checked single-pixel plot; mostly useful for diagnostics. */
 static inline void fb_chunked_plot(unsigned int x, unsigned int y,

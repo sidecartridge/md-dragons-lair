@@ -77,6 +77,23 @@ typedef void (*audio_pcm_cb_t)(int8_t *buf, uint32_t samples);
  * the DMA chip); replaces any other source. */
 void audio_set_pcm_callback(audio_pcm_cb_t cb, uint32_t rate_hz);
 
+/* How many samples a stream's callback can give now. */
+typedef uint32_t (*audio_pcm_avail_t)(void);
+
+/* A PCM stream at `rate_hz`: as audio_set_pcm_callback(), but the FIFO is
+ * topped up only with the samples `avail` says `cb` can give; while it has
+ * none, the output holds its last sample (silence, never a repeat).
+ * Replaces any other source. */
+void audio_set_pcm_stream(audio_pcm_cb_t cb, audio_pcm_avail_t avail,
+                          uint32_t rate_hz);
+
+/* The current source's samples (at its rate) the ST has played since it was
+ * installed, to within a few milliseconds; 0 before the first is heard. The
+ * clock that keeps pictures with the sound: it counts only what was heard,
+ * not what waits in the FIFO or ahead of the ST, and a held sample does not
+ * count. A new ST session starts it again from 0. */
+uint32_t audio_source_played(void);
+
 /* Loop `samples` signed 8-bit samples at `rate_hz`; `pcm` must stay live
  * while it plays. Replaces any other source. */
 void audio_play_pcm_loop(const int8_t *pcm, uint32_t samples, uint32_t rate_hz);

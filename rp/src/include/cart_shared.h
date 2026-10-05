@@ -46,8 +46,10 @@
  *                                        app-free, but for slots 2..5:
  *                                        commands for the IKBD, slot 6:
  *                                        the audio output, 7: the copy
- *                                        mode, 8: the profile, and
- *                                        slots 12..19: the palette).
+ *                                        mode, 8: the profile, 9: the
+ *                                        palette's generation, 12..19:
+ *                                        the palette, and 20..27: the
+ *                                        frame's palette).
  *   $FA4100  AUDIO_BUFFER       4096 B (YM volume pairs, or DMA samples)
  *   $FA5100  BOOT_STATUS        2 B  (read once by pre_auto: 0 = start)
  *   $FA5102  BOOT_MESSAGE     126 B  (why the RP refused to start)
@@ -127,22 +129,32 @@
 #define CART_PROFILE_25FPS_DMA_BYTES     512u
 #define CART_PROFILE_25FPS_DMA_LEAD      1536
 
-/* 16-entry ST palette published by the RP, applied by the m68k VBL
- * handler to $FFFF8240..$FFFF825E each frame. Format: 16 contiguous
- * 16-bit words. Each word is the standard ST 9-bit palette format
+/* The ST palette, two of them (palette.c). Format: 16 contiguous
+ * 16-bit words, each the standard ST 9-bit palette format
  * 0000.0RRR.0GGG.0BBB. uint16_t writes are transparent across the
  * cart-bus byte-swap so the RP can write the m68k-observable word
  * value directly.
  *
- * Lives inside SHARED_VARIABLES (slots 12..19 = offsets +0x30..0x4F
- * = absolute $FA4040..$FA405F). Apps that don't want RP-driven
- * palette publishing can leave the slot at zeros (= black palette
- * = all-black screen) and write $FFFF8240 from their own m68k code
- * instead. */
+ * The palette now, at CART_PALETTE_OFFSET (slots 12..19 of
+ * SHARED_VARIABLES, $FA4040..$FA405F), with its generation at
+ * CART_PALETTE_GEN_OFFSET (slot 9): the RP sets bit 15 of the generation
+ * while it writes the palette, then a new generation; the ST puts the
+ * palette in the shifter at the VBL after the generation changes.
+ *
+ * The frame's palette, at CART_FRAME_PALETTE_OFFSET (slots 20..27,
+ * $FA4060..$FA407F): fb_publish() writes it with the frame, before the
+ * frame counter; the ST copies it with the frame and puts it in the
+ * shifter at the VBL that first shows that frame, so a picture and its
+ * palette appear together. */
 #define CART_PALETTE_OFFSET                                                   \
   (CART_SHARED_VARIABLES_OFFSET + (12 * 4))      /* $4040 */
 #define CART_PALETTE_ENTRIES             16
 #define CART_PALETTE_SIZE                (CART_PALETTE_ENTRIES * 2)  /* 32 B */
+#define CART_PALETTE_GEN_OFFSET                                               \
+  (CART_SHARED_VARIABLES_OFFSET + (9 * 4))       /* $4034 */
+#define CART_PALETTE_GEN_BUSY            0x8000u
+#define CART_FRAME_PALETTE_OFFSET                                             \
+  (CART_SHARED_VARIABLES_OFFSET + (20 * 4))      /* $4060 */
 
 /* Audio sample buffer, used one of two ways (audio.c):
  *   - the YM: (vA, vB) YM2149 volume pairs, two bytes per sample for
@@ -242,7 +254,7 @@
  * to keep c2p's natural row-major output going to a 32 KB scratch
  * buffer in RP RAM, then do a chunk-reversed memcpy from scratch to
  * the cart FB once both cores finish (~120 us / frame, well under
- * fb_render_frame's main-loop budget). Per-byte address arithmetic
+ * a frame's main-loop budget). Per-byte address arithmetic
  * inside the c2p hot path is also possible but more invasive.
  *
  * Cost / benefit:

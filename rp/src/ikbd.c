@@ -18,13 +18,12 @@
 #include "debug.h"
 #include "ikbd_demux.h"
 #include "pico/stdlib.h"
-#include "pico/time.h"
 
-/* IKBD scancode for the ESC key. ESC press+release within
- * IKBD_ESC_RELEASE_TIMEOUT_US triggers CMD_BOOT_GEM via the cart
- * command sentinel. */
+/* IKBD scancode for the ESC key. An ESC release after an ESC press of the
+ * same ST session triggers CMD_BOOT_GEM via the cart command sentinel,
+ * however long the key was held: a press had to end within 200 ms once, and
+ * a normal press (about 340 ms, measured) was ignored. */
 #define IKBD_SCANCODE_ESC 0x01u
-#define IKBD_ESC_RELEASE_TIMEOUT_US 200000u  /* 200 ms */
 
 #define IKBD_RING_MASK (IKBD_RING_CAPACITY - 1u)
 
@@ -69,12 +68,12 @@ static ikbd_key_event_t s_key_ring[IKBD_KEY_RING_SIZE];
 static uint8_t          s_key_head = 0;
 static uint8_t          s_key_tail = 0;
 
-/* ESC press+release timestamp (microseconds, 0 = no press pending). */
-static uint32_t s_esc_press_us = 0;
+/* An ESC press seen, its release still to come. */
+static bool s_esc_pressed = false;
 
 /* When true (default), ESC press+release pairs write CMD_BOOT_GEM to
  * the cart sentinel and userfw exits to GEM. Apps that want to own
- * the ESC key (e.g. menu+demo dispatcher) clear this via
+ * the ESC key (e.g. a menu that uses it for "back") clear this via
  * ikbd_set_esc_auto_exit(false) -- ESC events are still delivered
  * through ikbd_pop_key, the auto-write is just gated off. */
 static bool s_esc_auto_exit = true;
@@ -99,9 +98,9 @@ static uint16_t s_out_gen = 0;
  * sends a packet once the mouse has moved that many counts, not after every
  * count. Every byte costs the ST an interrupt of about 40 us; a mouse moved
  * fast at threshold 1 fills the line (16 bytes a VBL, about 0.6 ms) and a
- * full-screen blit then misses VBLs (a Mega ST: 50 -> 40 frames a second in
- * a demo). The movement adds up the same; a packet carries up to that many
- * counts. */
+ * full-screen blit then misses VBLs (a Mega ST: 50 -> 40 frames a second
+ * with a full-screen frame). The movement adds up the same; a packet carries
+ * up to that many counts. */
 #define IKBD_MOUSE_THRESHOLD 4u
 
 typedef struct {
@@ -174,7 +173,7 @@ void ikbd_init(void) {
   s_dropped_seen = 0;
   s_key_head = 0;
   s_key_tail = 0;
-  s_esc_press_us = 0;
+  s_esc_pressed = false;
   s_esc_auto_exit = true;
   ikbd_demux_init(&s_demux, push_key, NULL);
   for (unsigned i = 0; i < IKBD_RESYNC_CAUSES; i++) s_resyncs_reported[i] = 0;
@@ -217,14 +216,11 @@ static void push_key(void *ctx, uint8_t scancode, bool is_press) {
    * the expected value (cart_asM68kLong). */
   if (scancode == IKBD_SCANCODE_ESC) {
     if (is_press) {
-      uint32_t now_us = time_us_32();
-      if (now_us == 0u) now_us = 1u;  /* avoid the "no press" sentinel */
-      s_esc_press_us = now_us;
+      s_esc_pressed = true;
     } else {
-      uint32_t press = s_esc_press_us;
-      s_esc_press_us = 0;
-      if (s_esc_auto_exit && press != 0u &&
-          (time_us_32() - press) < IKBD_ESC_RELEASE_TIMEOUT_US) {
+      bool pressed = s_esc_pressed;
+      s_esc_pressed = false;
+      if (s_esc_auto_exit && pressed) {
         *((volatile uint32_t *)((uintptr_t)&__rom_in_ram_start__ +
                                 CART_CMD_SENTINEL_OFFSET)) =
             cart_asM68kLong(CART_CMD_BOOT_GEM);
@@ -277,6 +273,7 @@ void ikbd_pump(void) {
         /* The ST booted and reset the IKBD: nothing held any more, and the
          * mode's commands go out again (the block may hold others). */
         s_live_mode = -1;
+        s_esc_pressed = false;
         ikbd_demux_session(&s_demux);
         ikbd_set_input_mode(s_mode);
         break;

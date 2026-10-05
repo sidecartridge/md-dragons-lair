@@ -10,6 +10,7 @@
  * of the RP's buffer). Everything the chip plays
  * must be the source in order, silence before it starts, or, when the FIFO
  * ran dry, the last sample held: never a stale or a skipped sample. */
+#include <stdio.h>
 #include <string.h>
 
 #include "audio.h"
@@ -417,6 +418,103 @@ static void test_resampling(void) {
   CHECK(all);
 }
 
+/* --- A stream, and the clock -------------------------------------------------- */
+
+/* A stream of the pattern that may give only `stream_limit` samples so far. */
+static uint32_t stream_given;
+static uint32_t stream_limit;
+
+static void stream_cb(int8_t *buf, uint32_t n) {
+  for (uint32_t i = 0; i < n; i++) {
+    buf[i] = pattern[(stream_given + i) % PATTERN];
+  }
+  stream_given += n;
+  CHECK(stream_given <= stream_limit);  /* never more than it said it had */
+}
+
+static uint32_t stream_avail(void) { return stream_limit - stream_given; }
+
+static uint32_t stream_rate;
+
+static void stream_source(void) {
+  stream_given = 0;
+  stream_limit = 0;
+  audio_set_pcm_stream(stream_cb, stream_avail, stream_rate);
+}
+
+/* Two stalls of the stream, else it keeps 8 VBLs ahead. 120 VBLs in all:
+ * the simulated chip counts 65,536 samples at most (16.16). */
+#define STREAM_VBLS 120
+static bool stalled(int f) { return (f >= 40 && f < 46) || (f >= 70 && f < 96); }
+
+/* The DMA chip at its own rate (no resampling: the samples played are the
+ * stream's): the pattern in order, the last sample held in the stalls,
+ * nothing else; and audio_source_played() the samples really played. */
+static void test_stream_clock_dma(void) {
+  stream_rate = AUDIO_DMA_RATE_HZ;
+  boot_with(0x11, stream_source);
+  uint32_t per_vbl = (CHIP_PER_VBL_Q16 >> 16) + 1u;
+  uint32_t underruns = audioUnderruns;
+  int32_t worst = 0;
+  for (int f = 0; f < STREAM_VBLS; f++) {
+    if (!stalled(f)) {
+      uint32_t want = (uint32_t)(f + 8) * per_vbl;
+      stream_limit = want > stream_limit ? want : stream_limit;
+    }
+    frame(true, false);
+    uint32_t s = first_sound(0);
+    uint32_t repeats;
+    uint32_t n = s < n_played ? follows(s, 0, true, &repeats) : 0;
+    if (s < n_played) {
+      CHECK_EQ(s + n, n_played);  /* the stream in order, or held */
+    }
+    uint32_t heard = s < n_played ? n - repeats : 0;
+    int32_t d = (int32_t)(audio_source_played() - heard);
+    worst = (d < 0 ? -d : d) > worst ? (d < 0 ? -d : d) : worst;
+  }
+  printf("stream on the DMA chip: the clock within %d samples (%d us) of what "
+         "played\n",
+         (int)worst, (int)(worst * 1000000 / (int32_t)AUDIO_DMA_RATE_HZ));
+  CHECK(worst <= (int32_t)(AUDIO_DMA_RATE_HZ * 6u / 1000u));  /* 6 ms */
+  CHECK(audioUnderruns > underruns);  /* the stalls held */
+}
+
+/* The YM at its own rate: the clock never goes back, moves a VBL of samples
+ * a VBL while the stream keeps up, stands still while the slices hold, and
+ * stays within the FIFO and the slices written ahead behind what was
+ * handed out. */
+static void test_stream_clock_ym(void) {
+  stream_rate = PROFILE_YM_RATE_HZ;
+  boot_with(0x00, stream_source);
+  uint32_t per_vbl = PROFILE_YM_RATE_HZ / 50u + 1u;
+  uint32_t last = 0;
+  uint32_t still = 0;
+  for (int f = 0; f < STREAM_VBLS; f++) {
+    if (!stalled(f)) {
+      uint32_t want = (uint32_t)(f + 8) * per_vbl;
+      stream_limit = want > stream_limit ? want : stream_limit;
+    }
+    st_vbl++;
+    slice_report = (int)(st_vbl % CART_AUDIO_SLICES);
+    for (int j = 0; j < WRITER_RUNS_PER_VBL; j++) {
+      now_us += VBL_US / WRITER_RUNS_PER_VBL;
+      writer->callback(writer);
+      if (j == 2) audio_render_frame();
+    }
+    uint32_t clock = audio_source_played();
+    CHECK(clock >= last);
+    CHECK(clock <= stream_given);
+    if (f > 20 && !stalled(f) && !stalled(f - 6)) {
+      CHECK(clock - last <= 2u * per_vbl);
+      CHECK(clock + 8u * per_vbl >= stream_given);
+    }
+    still += clock == last && f > 20;
+    last = clock;
+  }
+  CHECK(still > 0);  /* a stall held the clock */
+  CHECK(last > 80u * per_vbl);
+}
+
 int main(void) {
   make_pattern();
   audio_init();
@@ -429,5 +527,7 @@ int main(void) {
   test_pcm_source_on_ym();
   test_prefer_ym();
   test_resampling();
+  test_stream_clock_dma();
+  test_stream_clock_ym();
   TEST_END();
 }

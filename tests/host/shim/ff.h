@@ -8,7 +8,7 @@
 typedef unsigned int UINT;
 typedef uint32_t FSIZE_t;
 typedef unsigned char BYTE;
-typedef enum { FR_OK = 0, FR_DISK_ERR, FR_NO_FILE = 4 } FRESULT;
+typedef enum { FR_OK = 0, FR_DISK_ERR, FR_NO_FILE = 4, FR_NO_PATH = 5 } FRESULT;
 #define FA_READ 0x01
 
 typedef struct {
@@ -21,5 +21,6 @@ FRESULT f_open(FIL *fp, const char *path, BYTE mode);
 FRESULT f_read(FIL *fp, void *buff, UINT btr, UINT *br);
 FRESULT f_lseek(FIL *fp, FSIZE_t ofs);
 FRESULT f_close(FIL *fp);
+#define f_size(fp) ((fp)->size)
 
 #endif
