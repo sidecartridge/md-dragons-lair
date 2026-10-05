@@ -91,8 +91,10 @@ void fb_publish_prepare(void);
 void fb_publish_commit(void);
 
 /** @brief Whether fb_publish_commit() would go on at once: the ST has
- *         copied the frame published before (fb_pump_rom3() sees it). An app
- *         that must not stall (its sound to top up) commits only then. */
+ *         copied the frame published before (fb_pump_rom3() sees it), or
+ *         never will (not copied 200 ms after: an ST that boots counts the
+ *         frame it finds as seen). An app that must not stall (its sound to
+ *         top up) commits only then. */
 bool fb_publish_ready(void);
 
 /** @brief Drain the ROM3 commemul ring once, routing each captured

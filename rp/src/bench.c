@@ -2135,6 +2135,18 @@ static void conv_finish(int result) {
   s_dirty = true;
 }
 
+// The screen drawn, on the ST before the work behind it starts. At an ST's
+// start the hello comes seconds before its loop takes a frame (the IKBD's
+// reset: 2.8 s on a Mega ST's power-on), and it counts the frame it finds
+// as seen: the screen is published again until the ST shows one.
+static void publish_until_shown(void) {
+  uint32_t t0 = time_us_32();
+  do {
+    fb_publish();
+  } while (!fb_wait_shown(IP_SHOWN_TIMEOUT_US) &&
+           time_us_32() - t0 < CONV_SHOWN_TIMEOUT_US);
+}
+
 // Converts `entry` into its clip file for s_cv.gun_bits: the screen first,
 // then the memory and the job.
 static void conv_begin(const iso9660_entry_t *entry) {
@@ -2144,17 +2156,10 @@ static void conv_begin(const iso9660_entry_t *entry) {
   s_cv.lit = 0;
   f_mkdir(conv_folder(s_cv.gun_bits));  // FR_EXIST when it is there
 
-  // The screen, shown before its memory goes to the converter. At an ST's
-  // start the hello comes seconds before its loop takes a frame (the IKBD's
-  // reset: 2.8 s on a Mega ST's power-on), and it counts the frame it finds
-  // as seen: the screen is published again until the ST shows one.
+  // The screen, shown before its memory goes to the converter.
   conv_draw();
   palette_set(conv_palette(0));
-  uint32_t t0 = time_us_32();
-  do {
-    fb_publish();
-  } while (!fb_wait_shown(IP_SHOWN_TIMEOUT_US) &&
-           time_us_32() - t0 < CONV_SHOWN_TIMEOUT_US);
+  publish_until_shown();
 
   // The small one first: it fits the heap's free block from the boot.
   s_cv.job = malloc(sizeof(convjob_t));
@@ -2270,7 +2275,17 @@ static void conv_all_next(void) {
 static void conv_all_start(bool quiet) {
   if (!benchResults.image_found) {
     if (benchResults.sd_ok && !bench_busy()) {
+      // The same screen while the set is checked against its manifest.
+      memset(&s_cv, 0, sizeof(s_cv));
+      s_cv.all = true;
+      s_cv.checking = true;
+      s_cv.gun_bits = conv_machine_bits();
+      conv_draw();
+      palette_set(conv_palette(0));
+      publish_until_shown();
+      memset(&s_cv, 0, sizeof(s_cv));
       set_check();
+      palette_set(bench_palette);
     }
     return;
   }
@@ -2288,7 +2303,7 @@ static void conv_all_start(bool quiet) {
   s_cv.clip_index = -1;
   conv_draw();
   palette_set(conv_palette(0));
-  fb_publish();
+  publish_until_shown();  // every start shows the clips checked
   iso9660_dir_t dir;
   iso9660_entry_t entry;
   if (iso9660_opendir_root(&s_iso, &dir) == ISO9660_OK) {

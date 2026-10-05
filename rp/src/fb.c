@@ -43,9 +43,16 @@
  * let the next c2p race the blit -- so keep it generous; it should
  * never fire while the m68k is actually running. */
 #define FB_VSYNC_TIMEOUT_US 60000u
+/* A frame not copied this long after its publish never will be: an ST that
+ * boots counts the frame it finds as seen, without an ack. A running ST
+ * acks within 2 VBLs and a copy (about 70 ms at 25 fps, a VBL more with
+ * the mouse moved fast). Without this, an app that commits only once the
+ * ST has copied the frame before (fb_publish_ready()) waited for good. */
+#define FB_ACK_LOST_US 200000u
 
 static volatile uint32_t s_vbl_seen;
 static uint32_t s_vbl_published;
+static uint32_t s_published_at;  /* time_us_32() of the last publish */
 /* Publishes that gave up waiting for the ack: expected until the ST runs
  * userfw, never while it does. Readable over SWD by its symbol. */
 uint32_t fbAckTimeouts = 0;
@@ -233,7 +240,9 @@ void fb_publish_commit(void) {
   uint32_t t_wait = time_us_32();
   while (s_vbl_seen == s_vbl_published) {
     fb_pump_rom3();
-    if (time_us_32() - t_wait > FB_VSYNC_TIMEOUT_US) {
+    uint32_t now = time_us_32();
+    if (now - t_wait > FB_VSYNC_TIMEOUT_US ||
+        now - s_published_at > FB_ACK_LOST_US) {
       fbAckTimeouts++;
       break;
     }
@@ -255,6 +264,7 @@ void fb_publish_commit(void) {
   fb_frame_tick++;
   __sync_synchronize();
   *fb_frame_counter = fb_frame_tick;
+  s_published_at = time_us_32();
 }
 
 void fb_publish(void) {
@@ -262,7 +272,10 @@ void fb_publish(void) {
   fb_publish_commit();
 }
 
-bool fb_publish_ready(void) { return s_vbl_seen != s_vbl_published; }
+bool fb_publish_ready(void) {
+  return s_vbl_seen != s_vbl_published ||
+         time_us_32() - s_published_at > FB_ACK_LOST_US;
+}
 
 uint32_t fb_last_convert_us(void) { return last_convert_us; }
 
