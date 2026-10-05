@@ -233,6 +233,8 @@ static void kill_player(game_t *g, game_out_t *out) {
   if (g->lives == 0) {
     g->lost_in = g->scene;
     game_over(g, false, out);
+  } else if (g->options.retry) {
+    start_scene(g, g->scene, true, out);  // the same scene again
   } else {
     choose_next_scene(g, true, out);
   }
@@ -403,7 +405,11 @@ void game_continue(game_t *g, uint32_t held, game_out_t *out) {
                  : 5;
   g->score = 0;
   g->scene = g->lost_in;
-  choose_next_scene(g, true, out);
+  if (g->options.retry) {
+    start_scene(g, g->lost_in, true, out);
+  } else {
+    choose_next_scene(g, true, out);
+  }
 }
 
 uint16_t game_hint_action(const game_t *g) {

@@ -7,7 +7,8 @@
  * game over clip; a player following the hint (oldies mode's move) winning
  * too; infinite lives (the option and the arcade's secret) never ending;
  * a game started at a chosen scene; a continue after game over; the hint
- * showing an open window when one is; and a diagonal pressed taking a
+ * showing an open window when one is; a late press passing with a grace;
+ * a death replaying its scene with retry; and a diagonal pressed taking a
  * diagonal's move before its directions'. */
 
 #include <string.h>
@@ -339,6 +340,33 @@ static void check_grace(void) {
   printf("grace: %d late presses passed, %d deaths kept\n", passed, killed);
 }
 
+// Retry: a player doing nothing dies five times in the first scene after
+// the introduction, never in another; a continue replays that scene.
+static void check_retry(void) {
+  sim_t s;
+  game_options_t o = options();
+  o.retry = true;
+  sim_init(&s, &o);
+  sim_start(&s, 0);
+  uint16_t first = GAME_SCENE_NONE;
+  for (uint32_t i = 0; i < GAME_TICKS && !s.over; i++) {
+    sim_tick(&s, 0);
+    if (s.g.playing && s.g.scene != game_intro_scene) {
+      if (first == GAME_SCENE_NONE) {
+        first = s.g.scene;
+      }
+      CHECK_EQ(s.g.scene, first);
+    }
+  }
+  CHECK(s.over && !s.won);
+  CHECK_EQ(s.lives_lost, 5);
+  CHECK_EQ(s.g.lost_in, first);
+  game_out_t out;
+  game_continue(&s.g, 0, &out);
+  CHECK_EQ(s.g.scene, first);
+  CHECK(out.seek || out.single_frame);
+}
+
 // A diagonal never kills: its two directions pressed inside a window where
 // the diagonal leads to a death do not take that move.
 static void check_diagonal_never_kills(void) {
@@ -419,6 +447,7 @@ int main(void) {
   check_hint_open();
   check_diagonal_never_kills();
   check_grace();
+  check_retry();
   check_diagonal();
   TEST_END();
 }

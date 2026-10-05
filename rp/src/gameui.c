@@ -485,6 +485,7 @@ static game_options_t options_for_game(void) {
   o.fixed_order = (s_ui.options & GAMEUI_OPT_FIXED) != 0;
   o.start_scene = s_ui.start_scene;
   o.grace_ms = (s_ui.options & GAMEUI_OPT_ARCADE) ? 0u : GRACE_MS;
+  o.retry = (s_ui.options & GAMEUI_OPT_RETRY) != 0;
 #ifdef GAMEUI_TRACE
   if (s_bot.on) {
     o.infinite_lives = true;  // a death is reported, and the bot goes on
@@ -828,6 +829,8 @@ static void draw_menu(void) {
   textf(3, r++, C_TEXT, "S  INPUT SOUNDS             %5s", on_off(GAMEUI_OPT_SOUNDS));
   textf(3, r++, C_TEXT, "A  TIMING                 %7s",
         (s_ui.options & GAMEUI_OPT_ARCADE) ? "ARCADE" : "RELAXED");
+  textf(3, r++, C_TEXT, "D  AFTER A DEATH          %7s",
+        (s_ui.options & GAMEUI_OPT_RETRY) ? "RETRY" : "MOVE ON");
   text(3, r++, C_TEXT, "P  START AT");
   text(6, r++, C_VALUE, s_ui.start_scene == GAME_SCENE_NONE
                             ? "THE START"
@@ -1135,6 +1138,7 @@ static void press(uint8_t sc) {
         case 0x2E: toggle(GAMEUI_OPT_CONTINUE); break;  // C
         case 0x1F: toggle(GAMEUI_OPT_SOUNDS); break;    // S
         case 0x1E: toggle(GAMEUI_OPT_ARCADE); break;    // A
+        case 0x20: toggle(GAMEUI_OPT_RETRY); break;     // D
         case 0x26:                                      // L
           s_ui.lives = (uint8_t)(s_ui.lives % 5 + 1);
           settings_store();
