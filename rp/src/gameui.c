@@ -62,6 +62,10 @@ static const uint16_t gameui_palette[16] = {
 #define PICK_ROWS 20                // the picker's lines on the screen
 #define FRAME_MS (CLIP_SAMPLES * 1000u / CLIP_SAMPLE_RATE)
 
+#if defined(_DEBUG) && (_DEBUG != 0)
+#define GAMEUI_TRACE 1  // the presses on the console, and the bot
+#endif
+
 static struct {
   gameui_host_t host;
   int mode;
@@ -76,6 +80,7 @@ static struct {
   // stick in port 1, read once a pass, the same.
   uint32_t keys_held;
   uint32_t keys_pressed;
+  uint32_t key_at;       // time_us_32() of the last key press
   uint8_t stick;
   uint8_t stick_pressed;
   uint32_t sound_t0;     // the last input sound
@@ -99,6 +104,28 @@ static struct {
   int initial;           // the letter being entered
   char scores[HISCORES][HISCORE_LEN + 1];
 } s_ui;
+
+#ifdef GAMEUI_TRACE
+// A game's presses, for its summary (see trace()).
+static struct {
+  uint32_t moves, early, early_ms, late, late_ms, deaths;
+} s_trace;
+
+// The bot (gameui_bot()).
+static struct {
+  bool on;
+  bool stick;
+  uint32_t offset_ms;
+  uint16_t sequence;  // the sequence of the last press
+  uint16_t pressed;   // and its move: one press a window
+  bool down;
+  uint8_t input;
+  uint32_t down_at;
+  uint32_t t0;
+} s_bot;
+
+static void trace_summary(bool won);
+#endif
 
 // --- Text ---------------------------------------------------------------------------
 
@@ -379,6 +406,14 @@ static void game_over(bool won) {
   s_ui.last_score = s_ui.game.score;
   DPRINTF("Game over: %s, score %lu\n", won ? "won" : "lost",
           (unsigned long)s_ui.last_score);
+#ifdef GAMEUI_TRACE
+  bool bot = s_bot.on;
+  trace_summary(won);
+  if (bot) {
+    enter_mode(MODE_SCORES);  // no initials: not a player's score
+    return;
+  }
+#endif
   if (!won && (s_ui.options & GAMEUI_OPT_CONTINUE)) {
     enter_mode(MODE_CONTINUE);
     return;
@@ -443,6 +478,9 @@ static game_options_t options_for_game(void) {
   o.watch = (s_ui.options & GAMEUI_OPT_WATCH) != 0;
   o.fixed_order = (s_ui.options & GAMEUI_OPT_FIXED) != 0;
   o.start_scene = s_ui.start_scene;
+#ifdef GAMEUI_TRACE
+  o.infinite_lives |= s_bot.on;  // a death is reported, and the bot goes on
+#endif
   return o;
 }
 
@@ -476,8 +514,223 @@ static void start_game(void) {
   game_out_t out;
   game_start(&s_ui.game, held_now(), &out);
   s_ui.mode = MODE_PLAY;
+#ifdef GAMEUI_TRACE
+  memset(&s_trace, 0, sizeof(s_trace));
+#endif
   apply(&out);
 }
+
+// --- The presses on the console, and the bot (debug builds) -------------------
+//
+// Every press in a game: the move it took and where in its window, or how
+// early or late it was for its input's nearest window, with the time since
+// the key reached the RP; every death without a move, with the move that
+// passed; at the game's end, the presses early and late on average. The
+// bot plays through the IKBD decoder, as the keyboard or the stick does.
+
+#ifdef GAMEUI_TRACE
+#define BOT_HOLD_US 80000u  // a press held, as a quick tap
+
+static const char *const input_names[GAME_INPUTS] = {
+    "UP",        "DOWN",       "LEFT",  "RIGHT", "UP+LEFT",
+    "UP+RIGHT",  "DOWN+LEFT",  "DOWN+RIGHT", "SWORD", "START"};
+
+static bool leads_to_death(const game_action_t *a) {
+  return a->next != GAME_SEQ_NONE &&
+         (game_sequences[a->next].flags & GAME_SEQ_KILLS) != 0;
+}
+
+// The tick's presses (`scene`, `seq` and `ms`: the scene, the sequence and
+// its time before the tick; `pressed`: the inputs pressed at it).
+static void trace(uint16_t scene, uint16_t seq, uint32_t ms, uint32_t pressed,
+                  const game_out_t *out) {
+  const char *where = game_scenes[scene].name;
+  const char *sname = game_sequence_names[seq];
+  const game_sequence_t *s = &game_sequences[seq];
+  uint32_t key_ms = (time_us_32() - s_ui.key_at) / 1000u;
+  if (out->taken != GAME_SEQ_NONE) {
+    const game_action_t *a = &game_actions[out->taken];
+    s_trace.moves++;
+    DPRINTF("Move %s taken in %s.%s at %lu ms, window %lu-%lu%s\n",
+            input_names[a->input], where, sname, (unsigned long)ms,
+            (unsigned long)a->from_ms, (unsigned long)a->to_ms,
+            leads_to_death(a) ? ": a death" : "");
+  } else {
+    for (int in = 0; in < GAME_INPUTS; in++) {
+      if (!(pressed & GAME_BIT(in))) {
+        continue;
+      }
+      const game_action_t *near = NULL;
+      int32_t gap = 0;  // < 0: early by -gap ms; > 0: late
+      for (uint16_t i = 0; i < s->action_count; i++) {
+        const game_action_t *a = &game_actions[s->first_action + i];
+        if (a->input != in) {
+          continue;
+        }
+        int32_t d = ms < a->from_ms   ? (int32_t)ms - (int32_t)a->from_ms
+                    : ms > a->to_ms ? (int32_t)(ms - a->to_ms)
+                                    : 0;
+        if (near == NULL || abs(d) < abs(gap)) {
+          near = a;
+          gap = d;
+        }
+      }
+      if (near == NULL) {
+        DPRINTF("Press %s in %s.%s at %lu ms: no %s move there (key %lu ms "
+                "before)\n",
+                input_names[in], where, sname, (unsigned long)ms,
+                input_names[in], (unsigned long)key_ms);
+      } else if (gap == 0) {
+        DPRINTF("Press %s in %s.%s at %lu ms: in its window %lu-%lu, a move "
+                "already taken\n",
+                input_names[in], where, sname, (unsigned long)ms,
+                (unsigned long)near->from_ms, (unsigned long)near->to_ms);
+      } else {
+        if (gap < 0) {
+          s_trace.early++;
+          s_trace.early_ms += (uint32_t)-gap;
+        } else {
+          s_trace.late++;
+          s_trace.late_ms += (uint32_t)gap;
+        }
+        DPRINTF("Press %s in %s.%s at %lu ms: %ld ms %s for its window "
+                "%lu-%lu%s (key %lu ms before)\n",
+                input_names[in], where, sname, (unsigned long)ms,
+                (long)abs(gap), gap < 0 ? "early" : "late",
+                (unsigned long)near->from_ms, (unsigned long)near->to_ms,
+                leads_to_death(near) ? ", a death" : "", (unsigned long)key_ms);
+      }
+    }
+  }
+  // A death with no move: the sequence ran out into one.
+  uint16_t now_seq = s_ui.game.sequence;
+  if (out->taken == GAME_SEQ_NONE && now_seq != seq &&
+      (game_sequences[now_seq].flags & GAME_SEQ_KILLS) &&
+      !(s->flags & GAME_SEQ_KILLS)) {
+    s_trace.deaths++;
+    const game_action_t *pass = NULL;
+    for (uint16_t i = 0; i < s->action_count && pass == NULL; i++) {
+      const game_action_t *a = &game_actions[s->first_action + i];
+      if (a->next != GAME_SEQ_NONE && !leads_to_death(a)) {
+        pass = a;
+      }
+    }
+    if (pass != NULL) {
+      DPRINTF("Death in %s.%s at %lu ms, no move; %s passed, window %lu-%lu\n",
+              where, sname, (unsigned long)ms, input_names[pass->input],
+              (unsigned long)pass->from_ms, (unsigned long)pass->to_ms);
+    } else {
+      DPRINTF("Death in %s.%s at %lu ms, no move\n", where, sname,
+              (unsigned long)ms);
+    }
+  }
+}
+
+static void trace_summary(bool won) {
+  DPRINTF("Game %s: %lu moves, %lu deaths; presses early %lu (%lu ms on "
+          "average), late %lu (%lu ms on average)%s\n",
+          won ? "won" : "over", (unsigned long)s_trace.moves,
+          (unsigned long)s_trace.deaths, (unsigned long)s_trace.early,
+          (unsigned long)(s_trace.early ? s_trace.early_ms / s_trace.early : 0),
+          (unsigned long)s_trace.late,
+          (unsigned long)(s_trace.late ? s_trace.late_ms / s_trace.late : 0),
+          s_bot.on ? ", by the bot" : "");
+  if (s_bot.on) {
+    DPRINTF("Bot: %lu s\n", (unsigned long)((time_us_32() - s_bot.t0) / 1000000u));
+    s_bot.on = false;
+  }
+}
+
+// The keys an input stands for, or the stick's bytes as the IKBD sends them
+// with the mouse on (directions as stick 1's events, fire as the right
+// button), into the decoder as if from the ST.
+static void bot_input(uint8_t input, bool press) {
+  static const uint8_t keys[9][2] = {
+      {0x48, 0},    {0x50, 0},    {0x4B, 0},    {0x4D, 0},    {0x48, 0x4B},
+      {0x48, 0x4D}, {0x50, 0x4B}, {0x50, 0x4D}, {0x39, 0}};
+  static const uint8_t dirs[8] = {
+      IKBD_JOY_UP,                   IKBD_JOY_DOWN,
+      IKBD_JOY_LEFT,                 IKBD_JOY_RIGHT,
+      IKBD_JOY_UP | IKBD_JOY_LEFT,   IKBD_JOY_UP | IKBD_JOY_RIGHT,
+      IKBD_JOY_DOWN | IKBD_JOY_LEFT, IKBD_JOY_DOWN | IKBD_JOY_RIGHT};
+  if (input > GAME_IN_ACTION) {
+    return;
+  }
+  if (!s_bot.stick) {
+    for (int k = 0; k < 2 && keys[input][k] != 0; k++) {
+      ikbd_inject_byte(press ? keys[input][k] : (uint8_t)(keys[input][k] | 0x80u));
+    }
+  } else if (input == GAME_IN_ACTION) {
+    ikbd_inject_byte(press ? 0xF9u : 0xF8u);  // the right button, no move
+    ikbd_inject_byte(0);
+    ikbd_inject_byte(0);
+  } else {
+    ikbd_inject_byte(0xFFu);
+    ikbd_inject_byte(press ? dirs[input] : 0u);
+  }
+}
+
+// After each tick of a game: the hint's move pressed `offset_ms` into its
+// window, released after BOT_HOLD_US.
+static void bot_step(void) {
+  uint32_t now = time_us_32();
+  if (s_bot.down) {
+    if (now - s_bot.down_at >= BOT_HOLD_US) {
+      bot_input(s_bot.input, false);
+      s_bot.down = false;
+    }
+    return;
+  }
+  if (s_ui.game.sequence != s_bot.sequence) {
+    s_bot.sequence = s_ui.game.sequence;
+    s_bot.pressed = GAME_SEQ_NONE;
+  }
+  uint16_t a = game_hint_action(&s_ui.game);
+  if (a == GAME_SEQ_NONE || a == s_bot.pressed ||
+      s_ui.game.sequence_ms < game_actions[a].from_ms + s_bot.offset_ms) {
+    return;
+  }
+  const game_action_t *act = &game_actions[a];
+  bot_input(act->input, true);
+  s_bot.down = true;
+  s_bot.input = act->input;
+  s_bot.down_at = now;
+  s_bot.pressed = a;
+  DPRINTF("Bot: %s pressed in %s.%s at %lu ms, window %lu-%lu\n",
+          input_names[act->input], game_scenes[s_ui.game.scene].name,
+          game_sequence_names[s_ui.game.sequence],
+          (unsigned long)s_ui.game.sequence_ms, (unsigned long)act->from_ms,
+          (unsigned long)act->to_ms);
+}
+
+void gameui_bot(int offset_ms, bool stick) {
+  if (s_bot.down) {
+    bot_input(s_bot.input, false);
+  }
+  if (offset_ms < 0 || s_ui.mode == MODE_OFF) {
+    if (s_bot.on) {
+      DPRINTF("Bot: stopped\n");
+    }
+    s_bot.on = false;
+    return;
+  }
+  memset(&s_bot, 0, sizeof(s_bot));
+  s_bot.on = true;
+  s_bot.stick = stick;
+  s_bot.offset_ms = (uint32_t)offset_ms;
+  s_bot.sequence = GAME_SEQ_NONE;
+  s_bot.pressed = GAME_SEQ_NONE;
+  s_bot.t0 = time_us_32();
+  DPRINTF("Bot: a game, each move pressed %d ms into its window, on the %s\n",
+          offset_ms, stick ? "stick" : "keyboard");
+  start_game();
+}
+#else
+void gameui_bot(int offset_ms, bool stick) {
+  (void)offset_ms;
+  (void)stick;
+}
+#endif
 
 // The engine and its clip, a pass.
 static void run_engine(void) {
@@ -501,10 +754,28 @@ static void run_engine(void) {
       }
     }
   }
+  uint32_t now_ms = clip_ms();
+  uint32_t held = held_inputs();
+#ifdef GAMEUI_TRACE
+  // The engine as the tick finds it, for the trace.
+  bool playing = s_ui.game.playing;
+  uint16_t scene = s_ui.game.scene;
+  uint16_t seq = s_ui.game.sequence;
+  uint32_t seq_ms = now_ms > s_ui.game.offset_ms ? now_ms - s_ui.game.offset_ms : 0;
+  uint32_t pressed = held & ~s_ui.game.pressed_before &
+                     (GAME_BIT(GAME_IN_UP) | GAME_BIT(GAME_IN_DOWN) |
+                      GAME_BIT(GAME_IN_LEFT) | GAME_BIT(GAME_IN_RIGHT) |
+                      GAME_BIT(GAME_IN_ACTION));
+#endif
   game_out_t out;
-  game_tick(&s_ui.game, clip_ms(), held_inputs(), time_us_32(), &out);
+  game_tick(&s_ui.game, now_ms, held, time_us_32(), &out);
   s_ui.keys_pressed = 0;
   s_ui.stick_pressed = 0;
+#ifdef GAMEUI_TRACE
+  if (playing && s_ui.mode == MODE_PLAY) {
+    trace(scene, seq, seq_ms, pressed, &out);
+  }
+#endif
   // The input sounds, before a clip the tick starts: a move's tone is then
   // heard as that clip's sound begins.
   if (out.sounds != 0 && (s_ui.options & GAMEUI_OPT_SOUNDS) &&
@@ -517,6 +788,11 @@ static void run_engine(void) {
     }
   }
   apply(&out);
+#ifdef GAMEUI_TRACE
+  if (s_bot.on && s_ui.mode == MODE_PLAY && s_ui.game.playing) {
+    bot_step();
+  }
+#endif
 }
 
 // --- Our screens --------------------------------------------------------------------
@@ -694,6 +970,9 @@ void gameui_stop(void) {
     player_close(PLAYER_STOPPED);
   }
   player_set_overlay(NULL);
+#ifdef GAMEUI_TRACE
+  gameui_bot(-1, false);
+#endif
   s_ui.host.card_fast(false);
   ikbd_set_input_mode(IKBD_INPUT_KEYBOARD);
   s_ui.mode = MODE_OFF;
@@ -789,6 +1068,7 @@ static void track_keys(const ikbd_key_event_t *key) {
   if (key->is_press) {
     s_ui.keys_held |= bit;
     s_ui.keys_pressed |= bit;
+    s_ui.key_at = time_us_32();
   } else {
     s_ui.keys_held &= ~bit;
   }

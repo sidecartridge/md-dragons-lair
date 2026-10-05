@@ -3473,6 +3473,16 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
         game_open();
       }
       return 1;
+    case DEVHOOKS_APP_GAME_BOT:
+      if (payload_size >= 2u) {
+        if (!gameui_active()) {
+          game_open();
+        }
+        gameui_bot((int)payload[0], payload_size >= 4u && payload[1] != 0);
+      } else {
+        gameui_bot(-1, false);
+      }
+      return 1;
     case DEVHOOKS_APP_SOAK:
       soak_start(payload_size >= 2u ? (int)payload[0] : 0,
                  payload_size >= 4u && (payload[1] == 3 || payload[1] == 4)

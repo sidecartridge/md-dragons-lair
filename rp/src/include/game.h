@@ -52,6 +52,7 @@ typedef struct {
   uint8_t then_clip;
   uint16_t frame;
   uint8_t sounds;      // GAME_SOUND_*
+  uint16_t taken;      // game_actions' index of the move taken, or GAME_SEQ_NONE
   bool game_over;      // the game ended (`won`): the attract mode follows
   bool won;
   bool started;        // a game started (the attract mode's start)
@@ -106,5 +107,8 @@ void game_continue(game_t *g, uint32_t held, game_out_t *out);
 // that opens first): its input, and whether its window is open. False when
 // there is none.
 bool game_hint(const game_t *g, uint8_t *input, bool *open);
+
+// The same move as game_actions' index (its window), or GAME_SEQ_NONE.
+uint16_t game_hint_action(const game_t *g);
 
 #endif  // GAME_H

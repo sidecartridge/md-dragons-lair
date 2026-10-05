@@ -232,10 +232,12 @@ static void check_actions(game_t *g, uint32_t pressed, game_out_t *out) {
       if (g->options.watch && g->playing && act->next != GAME_SEQ_NONE &&
           !kills(act->next)) {
         g->accepted = a;
+        out->taken = a;
         return;
       }
       if (pressed & GAME_BIT(act->input)) {
         g->accepted = a;
+        out->taken = a;
         if (act->input != GAME_IN_START) {
           out->sounds |= GAME_SOUND_ACCEPT;
         }
@@ -299,6 +301,7 @@ void game_init(game_t *g, const game_options_t *options) {
 void game_tick(game_t *g, uint32_t clip_ms, uint32_t held, uint32_t random,
                game_out_t *out) {
   memset(out, 0, sizeof(*out));
+  out->taken = GAME_SEQ_NONE;
   g->random = random;
   // A diagonal: its two directions held.
   static const uint8_t diag[4][3] = {
@@ -326,6 +329,7 @@ void game_tick(game_t *g, uint32_t clip_ms, uint32_t held, uint32_t random,
 
 void game_start(game_t *g, uint32_t held, game_out_t *out) {
   memset(out, 0, sizeof(*out));
+  out->taken = GAME_SEQ_NONE;
   g->start_pending = false;
   start_game(g, held, out);
   g->pressed_before = held;
@@ -333,6 +337,7 @@ void game_start(game_t *g, uint32_t held, game_out_t *out) {
 
 void game_continue(game_t *g, uint32_t held, game_out_t *out) {
   memset(out, 0, sizeof(*out));
+  out->taken = GAME_SEQ_NONE;
   g->pressed_before = held;
   g->playing = true;
   g->lives = g->options.starting_lives >= 1 && g->options.starting_lives <= 5
@@ -343,31 +348,37 @@ void game_continue(game_t *g, uint32_t held, game_out_t *out) {
   choose_next_scene(g, true, out);
 }
 
-bool game_hint(const game_t *g, uint8_t *input, bool *open) {
+uint16_t game_hint_action(const game_t *g) {
   if (!g->playing || g->accepted != GAME_SEQ_NONE) {
-    return false;
+    return GAME_SEQ_NONE;
   }
   // A window open now, else the one that opens first (the moves are listed
   // by input, not by time: the rapids pass either way).
   const game_sequence_t *s = seq_of(g);
-  const game_action_t *best = NULL;
+  uint16_t best = GAME_SEQ_NONE;
   uint32_t best_from = 0;
   for (uint16_t i = 0; i < s->action_count; i++) {
-    const game_action_t *act = &game_actions[s->first_action + i];
+    uint16_t a = (uint16_t)(s->first_action + i);
+    const game_action_t *act = &game_actions[a];
     if (act->to_ms < g->sequence_ms || act->next == GAME_SEQ_NONE ||
         kills(act->next)) {
       continue;
     }
     uint32_t from = act->from_ms > g->sequence_ms ? act->from_ms : g->sequence_ms;
-    if (best == NULL || from < best_from) {
-      best = act;
+    if (best == GAME_SEQ_NONE || from < best_from) {
+      best = a;
       best_from = from;
     }
   }
-  if (best == NULL) {
+  return best;
+}
+
+bool game_hint(const game_t *g, uint8_t *input, bool *open) {
+  uint16_t a = game_hint_action(g);
+  if (a == GAME_SEQ_NONE) {
     return false;
   }
-  *input = best->input;
-  *open = best->from_ms <= g->sequence_ms;
+  *input = game_actions[a].input;
+  *open = game_actions[a].from_ms <= g->sequence_ms;
   return true;
 }

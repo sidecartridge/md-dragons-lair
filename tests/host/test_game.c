@@ -29,6 +29,7 @@ typedef struct {
   bool won;
   uint32_t lives_lost;
   uint8_t lives_before;
+  uint32_t taken;  // moves the engine reported taken
 } sim_t;
 
 static uint32_t rng = 12345;
@@ -46,6 +47,10 @@ static void apply(sim_t *s, const game_out_t *out) {
       CHECK(out->clip < game_clip_count);
       CHECK(out->frame < game_clips[out->clip].frames);
     }
+  }
+  if (out->taken != GAME_SEQ_NONE) {
+    CHECK(out->taken < game_action_count);
+    s->taken++;
   }
   if (out->game_over) {
     s->over = true;
@@ -151,6 +156,7 @@ static void check_watch(bool fixed) {
   CHECK(s.won);
   CHECK_EQ(s.lives_lost, 0);
   CHECK(s.g.score > 0);
+  CHECK(s.taken > 0);
   // The intro, then 13 rows three times over, the lair last.
   CHECK(s.scenes_started >= 1u + 13u * 3u);
   printf("watch (%s): won in %u scenes, %.1f min, score %u\n",
@@ -190,6 +196,7 @@ static void check_hints(void) {
   printf("following the hints: %s in %u scenes, %u lives lost, score %u\n",
          s.won ? "won" : "lost", s.scenes_started, s.lives_lost, s.g.score);
   CHECK_EQ(s.lives_lost, 0);
+  CHECK(s.taken > 0);
 }
 
 static void check_infinite(void) {
@@ -253,6 +260,8 @@ static void check_hint_open(void) {
       bool open = false;
       CHECK(game_hint(&g, &input, &open));
       CHECK(open);
+      uint16_t h = game_hint_action(&g);
+      CHECK(h != GAME_SEQ_NONE && game_actions[h].input == input);
       checked++;
     }
   }

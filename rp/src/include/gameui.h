@@ -44,4 +44,11 @@ void gameui_frame(void);
 // Every key event, presses and releases.
 void gameui_key(const ikbd_key_event_t *key);
 
+// Debug builds: a game played by a bot through the IKBD decoder, as the
+// keyboard (or the stick in port 1) would: each move the hint shows pressed
+// `offset_ms` into its window, infinite lives, every press and death on the
+// console (as in any game of a debug build). A negative offset stops it.
+// Release builds: nothing.
+void gameui_bot(int offset_ms, bool stick);
+
 #endif  // GAMEUI_H
