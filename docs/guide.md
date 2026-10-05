@@ -10,7 +10,6 @@ a Mega STE, as the ST shows them.
 - [The start menu](#the-start-menu)
 - [Playing](#playing)
 - [Game over, the continue and the high scores](#game-over-the-continue-and-the-high-scores)
-- [The bench](#the-bench)
 - [Troubleshooting](#troubleshooting)
 
 ## What you need
@@ -103,7 +102,8 @@ game.
 | D | After a death | Move on: the next scene, as the arcade does; the scene you died in comes back later. Retry: the same scene again until you pass it or run out of lives. |
 | P | Start at | The scene a game starts at, from the list below. |
 | T | High scores | The table of the ten best. |
-| B | The bench | The test screens (see [the bench](#the-bench)). |
+| X | Booster | Back to the Multi-device's menu (the ST resets into it). |
+| Esc | GEM | Back to the desktop, from the menu or anywhere in the game. |
 
 **Start at** lists the start and every scene, the reversed ones (the arcade's mirrored rooms)
 included. Up and Down move, Left and Right a page, Return chooses, Space goes back without
@@ -164,28 +164,6 @@ movie and the menu, and it shows by itself after a game.
 
 Games in watch mode do not enter the table.
 
-## The bench
-
-B in the start menu opens the bench, the test screens the app grew from: the card, the machine
-and its TOS, and the image's directory when it is on the card. It measures the card, converts and
-plays clips on their own, and tests the pictures and the sound. G goes back to the game.
-
-<p align="center"><img src="images/bench.png" alt="The bench" width="480" /></p>
-
-| Key | What it does |
-| --- | --- |
-| Up / Down, Left / Right | scroll the listing, a line or a page |
-| R | the read test: the card's speed at two SPI clocks and four read sizes, and a clip's CRC-32 |
-| I | the intra pictures of the first scene clip, converted and shown (Left / Right: another clip; T: the timings; C: 512 or 4,096 colours; D: the dither; W: the palette's weighting; Space: back) |
-| P | the first scene clip's I and P pictures decoded in place on the cartridge, timed and checked by CRC-32 (Space: back) |
-| A | the first scene clip's sound, decoded and played (+ / -: the volume in 3 dB steps; Left / Right: another clip; Space: stop) |
-| C | the game's clips checked and those not there converted, as at every start (Space: stop, or back) |
-| V | the clips: the list of the converted clips of one set (S: the other set; Return: play one; L: play every clip from there to the last, then the run's results; Space: back). While a clip plays: Space pauses it, Left / Right the previous or next clip, S the same clip in the other set at the same frame, O the frame and the times over the picture, U / D the volume, Q stops it and shows the pictures shown and dropped and the times |
-| T / Y | the palette test: two pictures with palettes of their own, sent with the frame (T: only red and green show) or before it, the old way (Y: blue and white flashes); Space: back |
-| G | the game |
-| X | back to Booster, the Multi-device's menu (the ST resets into it) |
-| Esc | back to GEM |
-
 ## Troubleshooting
 
 - **The ST starts GEM without the game.** Switch it off and on again: the cartridge must be
@@ -195,6 +173,8 @@ plays clips on their own, and tests the pictures and the sound. G goes back to t
   missing, or were made by an older converter: make them again (see
   [the clips on the card](#the-clips-on-the-card)), or leave the image on the card and let the
   cartridge convert what is needed.
+- **The screen says some clips are not converted yet.** A conversion was stopped, or a clip
+  failed (a full card): C converts those missing, or the next start does.
 - **The joystick does nothing.** It must be in the joystick port, not the mouse's.
 - **A scene seems impossible.** Try oldies mode (H) to see the moves, the relaxed timing (A),
   retry (D) to practise a scene, or start at it (P).
@@ -202,4 +182,4 @@ plays clips on their own, and tests the pictures and the sound. G goes back to t
   596 MB; once a set is complete the image can go.
 - **The cartridge's SELECT button** restarts the cartridge with a short press (then reset the
   ST); held for 10 seconds it is a factory reset of the Multi-device's settings.
-- **Back to the Multi-device's menu**: X in the bench, or the SELECT button.
+- **Back to the Multi-device's menu**: X in the start menu, or the SELECT button.

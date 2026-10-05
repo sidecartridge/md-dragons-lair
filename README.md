@@ -44,10 +44,11 @@ STE or a Mega STE, through the YM2149 elsewhere. The game's logic is
    in about an hour.
 3. Put the card in the Multi-device and switch the ST on: the clips are checked, then the
    attract movie plays.
-4. Fire, Space or Return to play; M for the start menu and its options.
+4. Fire, Space or Return to play; M for the start menu and its options. Esc goes back to GEM,
+   X in the start menu back to the Multi-device's menu.
 
 **[The user guide](docs/guide.md)** has everything else: the options, how to play, the high
-scores, the bench and what to do when something goes wrong.
+scores and what to do when something goes wrong.
 
 <table>
   <tr>

@@ -23,6 +23,7 @@
 #include "pico/time.h"
 #include "player.h"
 #include "settings.h"
+#include "st_session.h"
 
 extern const struct FB_FONT font8x8;
 
@@ -68,6 +69,9 @@ static const uint16_t gameui_palette[16] = {
 
 #if defined(_DEBUG) && (_DEBUG != 0)
 #define GAMEUI_TRACE 1  // the presses on the console, and the bot
+#define GAMEUI_BENCH 1  // B in the menu: the bench, a development tool
+#else
+#define GAMEUI_BENCH 0
 #endif
 
 static struct {
@@ -857,7 +861,12 @@ static void draw_menu(void) {
                             ? "THE START"
                             : game_scenes[s_ui.start_scene].title);
   r++;
-  text(3, r++, C_DIM, "T  HIGH SCORES     B  THE BENCH");
+  text(3, r, C_DIM, "T  HIGH SCORES");
+  if (GAMEUI_BENCH) {
+    text(22, r, C_DIM, "B  THE BENCH");
+  }
+  r++;
+  text(3, r++, C_DIM, "X  BOOSTER         ESC  GEM");
   textf(3, 22, C_DIM, "BEST  %.3s  %lu", s_ui.scores[0],
         (unsigned long)hiscore_of(0));
   centred(24, C_DIM, "IN GAME: P PAUSE, U/D VOLUME");
@@ -1170,9 +1179,14 @@ static void press(uint8_t sc) {
           enter_mode(MODE_PICK);
           break;
         case 0x14: enter_mode(MODE_SCORES); break;  // T
-        case 0x30:  // B: the bench
-          gameui_stop();
-          s_ui.host.to_bench();
+        case 0x2D:  // X: back to Booster, the Multi-device's menu
+          st_session_return_to_booster();
+          break;
+        case 0x30:  // B: the bench, in debug builds
+          if (GAMEUI_BENCH) {
+            gameui_stop();
+            s_ui.host.to_bench();
+          }
           break;
         default:
           if (fire) {

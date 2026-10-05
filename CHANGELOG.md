@@ -11,6 +11,7 @@ Daphne and Singe the dragon, by the arcade's own rules.
 - **A start menu** in place of "insert coins": oldies mode (the move to make drawn over the
   picture), infinite lives or 1 to 5, the arcade's scene order or a fixed one, watch mode,
   continue, input sounds, relaxed or arcade timing, retry after a death, and start at any scene.
+  Esc goes back to GEM, X to the Multi-device's menu.
 - **Pause, the volume and ten high scores**, all remembered; the arcade's up-and-left secret too.
 - **Your own CD-ROM**: Dragon's Lair CD-ROM (Version 3.1) by Digital Leisure, the only edition
   that works. If your disc no longer reads, the Internet Archive keeps a copy for preservation:
