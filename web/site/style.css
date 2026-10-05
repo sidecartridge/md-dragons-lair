@@ -101,6 +101,7 @@ h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
 }
 
 .step p { margin: 0.3rem 0; }
+.step .note { color: var(--color-ink-2); font-size: 0.92rem; }
 
 .num {
   display: inline-flex;

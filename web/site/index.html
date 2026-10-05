@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light dark">
   <title>Dragon's Lair: prepare the SD card</title>
-  <meta name="description" content="Converts the clips of your own Dragon's Lair CD-ROM image into the files the SidecarTridge Multi-device plays on an Atari ST or STE, in your browser: nothing is uploaded.">
+  <meta name="description" content="Converts the clips of your own Dragon's Lair CD-ROM (Version 3.1) image into the files the SidecarTridge Multi-device plays on an Atari ST or STE, in your browser: nothing is uploaded.">
   <link rel="stylesheet" href="style.css">
   <script type="module" src="app.js"></script>
 </head>
@@ -29,7 +29,12 @@
 
     <section class="step" id="step-image">
       <h2><span class="num">1</span> Your CD-ROM image</h2>
-      <p>The ISO 9660 image of the game's CD-ROM (<code>DL_CDROM_V31.ISO</code>, about 600 MB).</p>
+      <p>Only one PC CD-ROM works: <strong>Dragon's Lair CD-ROM (Version 3.1)</strong> by Digital
+        Leisure. Choose its ISO 9660 image (<code>DL_CDROM_V31.ISO</code>, about 600 MB).</p>
+      <p class="note">If your own disc no longer reads after all these years, the Internet Archive
+        keeps a copy for preservation: look for
+        <a href="https://archive.org/search?query=%22Dragon%27s+Lair+CD-ROM+%28Version+3.1%29%22"
+          target="_blank" rel="noopener">“Dragon's Lair CD-ROM (Version 3.1)”</a> on archive.org.</p>
       <label class="drop" id="drop">
         <input type="file" id="image" accept=".iso,.ISO">
         <span id="drop-text">Choose the image, or drop it here</span>

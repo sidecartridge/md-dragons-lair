@@ -56,7 +56,7 @@ async function chooseImage(file) {
     return;
   }
   if (!opened.clips.some((c) => c.name === 'S01.MPG')) {
-    status(`${file.name} is not the game's CD-ROM: it has no S01.MPG.`, 'bad');
+    status(`${file.name} is not Dragon's Lair CD-ROM (Version 3.1): it has no S01.MPG.`, 'bad');
     return;
   }
   image = file;
