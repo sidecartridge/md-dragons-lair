@@ -574,7 +574,9 @@ def grab_frames(elf: str, count: int, now: bool,
     counter = base + defs["CART_FB_FRAME_COUNTER_OFFSET"]
     fb = base + defs["CART_FRAMEBUFFER_OFFSET"]
     fb_size = defs["CART_FRAMEBUFFER_SIZE"]
-    pal = base + defs["CART_PALETTE_OFFSET"]
+    # The frame's palette, written with it: the one the ST shows it with (the
+    # palette now may be another, as while a clip plays).
+    pal = base + defs["CART_FRAME_PALETTE_OFFSET"]
     pal_size = defs["CART_PALETTE_SIZE"]
     with tempfile.TemporaryDirectory() as tmp:
         cmds = [] if now else ["halt", f"wp 0x{counter:08x} 4 w"]
