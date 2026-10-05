@@ -54,6 +54,11 @@ typedef struct {
   uint32_t seek_us;     // to the frame asked for: the key, then the records
   uint32_t slow_reads;  // records read in over 10 ms
   uint32_t late;        // pictures committed over 40 ms late
+  // How late the pictures show against the sound, in microseconds: the
+  // sound heard when the ST has copied one (it shows it at the next VBL)
+  // less its frame's time; minimum, mean, maximum, and how many.
+  int32_t screen_us[3];
+  uint32_t screens;
 } play_results_t;
 
 extern play_results_t playResults;

@@ -130,6 +130,10 @@ uint32_t fb_last_convert_us(void);
  *         Returns false on the timeout (no ST running, say). */
 bool fb_wait_shown(uint32_t timeout_us);
 
+/** @brief The frames the ST has copied (acknowledged) so far, as the ROM3
+ *         ring has been drained: it shows each at the VBL after its ack. */
+uint32_t fb_copied_count(void);
+
 #ifdef __cplusplus
 }
 #endif

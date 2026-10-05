@@ -106,6 +106,12 @@ static struct {
   uint32_t seen_underruns;
   uint32_t due_at;      // when the picture waiting became due (0: not yet)
   bool ack_waited;      // and the ST had not copied the one before
+  // The picture committed last, until the ST has copied it: its due sample
+  // and the ST's copies then (fb_copied_count()), for screen_us.
+  bool screen_pending;
+  uint32_t screen_due;
+  uint32_t screen_copies;
+  int64_t screen_sum;
 } s_play;
 
 // A tone over the sound (player_beep()): its samples left, its half period
@@ -230,6 +236,13 @@ static void close_clip(int result) {
           (unsigned long)playResults.publish_us[0],
           (unsigned long)playResults.publish_us[1],
           (unsigned long)playResults.publish_us[2]);
+  if (playResults.screens > 0) {
+    DPRINTF("Play %s: pictures shown %ld / %ld / %ld us after their sound "
+            "(min / mean / max, %lu pictures)\n",
+            s_play.path, (long)playResults.screen_us[0],
+            (long)playResults.screen_us[1], (long)playResults.screen_us[2],
+            (unsigned long)playResults.screens);
+  }
 }
 
 void player_close(int result) {
@@ -465,6 +478,23 @@ int player_frame(void) {
   uint32_t heard_step = heard - s_play.last_heard;
   s_play.last_pass = now;
   s_play.last_heard = heard;
+  // The ST has copied the picture committed last: it shows it at its next
+  // VBL. The sound heard now against that picture's frame is how late it
+  // shows (within a main loop's pass and a VBL).
+  if (s_play.screen_pending && fb_copied_count() != s_play.screen_copies) {
+    s_play.screen_pending = false;
+    int32_t us = (int32_t)((int64_t)(int32_t)(heard - s_play.screen_due) *
+                           1000000 / CLIP_SAMPLE_RATE);
+    r->screens++;
+    s_play.screen_sum += us;
+    if (r->screens == 1 || us < r->screen_us[0]) {
+      r->screen_us[0] = us;
+    }
+    if (r->screens == 1 || us > r->screen_us[2]) {
+      r->screen_us[2] = us;
+    }
+    r->screen_us[1] = (int32_t)(s_play.screen_sum / r->screens);
+  }
   // An underrun while it plays: where it falls, and what the reader had.
   if (audioUnderruns != s_play.seen_underruns) {
     if (!s_play.paused && !s_play.priming) {
@@ -535,6 +565,11 @@ int player_frame(void) {
                 (unsigned long)pass_us, (unsigned long)heard_step);
       }
       s_play.shown_frame = s_play.ready_frame;
+      if (s_play.ready_frame > s_play.first_frame && !s_play.paused) {
+        s_play.screen_pending = true;
+        s_play.screen_due = due;
+        s_play.screen_copies = fb_copied_count();
+      }
       s_play.ready = false;
     }
   }
