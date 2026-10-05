@@ -112,9 +112,9 @@ void game_start(game_t *g, uint32_t held, game_out_t *out);
 void game_continue(game_t *g, uint32_t held, game_out_t *out);
 
 // The move that passes now or next in the current sequence (a window not
-// yet over that leads on, not to a death; an open one first, else the one
-// that opens first): its input, and whether its window is open. False when
-// there is none.
+// yet over, its grace included, that leads on, not to a death; an open one
+// first, else the one that opens first): its input, and whether its window
+// is open. False when there is none.
 bool game_hint(const game_t *g, uint8_t *input, bool *open);
 
 // The same move as game_actions' index (its window), or GAME_SEQ_NONE.

@@ -307,6 +307,13 @@ static void check_grace(void) {
         g.accepted = GAME_SEQ_NONE;
         g.offset_ms = 0;
         g.start_pending = false;
+        if (grace) {
+          // The hint shows a move open as long as one can still pass.
+          uint8_t in;
+          bool op = false;
+          g.sequence_ms = t;
+          CHECK(game_hint(&g, &in, &op) && op);
+        }
         game_out_t out;
         game_tick(&g, t, GAME_BIT(act->input), 1, &out);
         if (open != NULL && (game_sequences[open->next].flags & GAME_SEQ_KILLS)) {

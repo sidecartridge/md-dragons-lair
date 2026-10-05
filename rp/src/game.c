@@ -424,8 +424,9 @@ uint16_t game_hint_action(const game_t *g) {
   for (uint16_t i = 0; i < s->action_count; i++) {
     uint16_t a = (uint16_t)(s->first_action + i);
     const game_action_t *act = &game_actions[a];
-    if (act->to_ms < g->sequence_ms || act->next == GAME_SEQ_NONE ||
-        kills(act->next)) {
+    // Its window over for good: its end, or its sequence's, plus the grace
+    // (the move still passes until then, so the hint stays).
+    if (grace_end(g, s, act) < g->sequence_ms || !passes(act)) {
       continue;
     }
     uint32_t from = act->from_ms > g->sequence_ms ? act->from_ms : g->sequence_ms;

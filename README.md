@@ -52,7 +52,7 @@ The start menu, every option saved on the cartridge:
 
 | Key | Option |
 | --- | --- |
-| H | oldies mode: the move that passes drawn over the picture, an outline before its window, filled in it |
+| H | oldies mode: the move that passes drawn over the picture, an outline before its window, filled while it can still be pressed |
 | I | infinite lives |
 | L | the lives at the start, 1 to 5 |
 | O | the scenes' order: the arcade's (a scene of each row at random) or a fixed one |
