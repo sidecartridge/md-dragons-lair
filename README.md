@@ -25,8 +25,10 @@ from, is one key away in the menu.
 ## What you need
 
 - Your own copy of the game's PC CD-ROM, as an ISO 9660 image: **Dragon's Lair CD-ROM
-  (Version 3.1)** by Digital Leisure, the only one that works. Nothing of the game is in this
-  repository or in the firmware.
+  (Version 3.1)** by Digital Leisure, the only one that works. None of the game's clips or sound
+  is in this repository or in the firmware. If your own disc no longer reads after all these
+  years, the Internet Archive keeps a copy for preservation: look for "Dragon's Lair CD-ROM
+  (Version 3.1)" on archive.org.
 - A microSD card in the Multi-device, with the image in the folder `/DLAIR` (the app creates the
   folder when it is missing). It looks for `DL_CDROM_V31.ISO`, then for any `.ISO` in the folder
   whose root holds `S01.MPG`.
