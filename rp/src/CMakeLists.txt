@@ -141,6 +141,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         fb_chunked.c
         fb_chunked_asm.S
         fb_font.c
+        game.c
+        gameui.c
         game_table.c
         gconfig.c
         ikbd.c
@@ -153,6 +155,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         mpeg1_video.c
         mpeg_ps.c
         palette.c
+        player.c
         qrcodegen.c
         picture16.c
         picture16_asm.S

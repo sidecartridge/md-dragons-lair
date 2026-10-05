@@ -6,15 +6,16 @@ Pico (RP2040) in the cartridge reads the game's clips from the SD card, turns ea
 320×200 in 16 colours of its own and serves it to the ST, which shows it at 25 frames a second;
 the sound plays through the DMA sound chip on an STE or a Mega STE, through the YM2149 elsewhere.
 
-**This is work in progress, and it is not the game yet.** The current firmware is a bench: it
-finds the CD-ROM image on the card and converts the game's clips once into a format of the app's
-own on the card, for the machine it is plugged into. Then it lists the image, measures how fast
-the card reads, decodes a clip's pictures and sound on the cartridge and shows or plays them, and
-plays the converted clips. The next versions play the game.
+**This is work in progress.** The firmware converts the game's clips once, for the machine it
+is plugged into, and plays the game: the attract movie, a start menu with options, and the game
+itself on the joystick or the keyboard, as the arcade plays it. The game's logic is
+[DirkSimple](https://github.com/icculus/DirkSimple)'s. The bench, the test firmware it grew
+from, is one key away in the menu.
 
 ## What you need
 
-- Your own copy of the game's PC CD-ROM, as an ISO 9660 image. Nothing of the game is in this
+- Your own copy of the game's PC CD-ROM, as an ISO 9660 image: **Dragon's Lair CD-ROM
+  (Version 3.1)** by Digital Leisure, the only one that works. Nothing of the game is in this
   repository or in the firmware.
 - A microSD card in the Multi-device, with the image in the folder `/DLAIR` (the app creates the
   folder when it is missing). It looks for `DL_CDROM_V31.ISO`, then for any `.ISO` in the folder
@@ -30,14 +31,47 @@ colours). It converts those that are missing or were made by an older version. T
 is the whole game: 56 minutes on a Mega STE, 535 MB on the card (546 MB for an ST), so the card
 needs that much free space. The screen shows the clip being converted, the whole game's progress
 and the time left, and the ST can be left alone. Space stops it, and the next start carries on
-where it stopped. When every clip is there, the bench comes up at once, and the set gets a list of
-its clips, `SET.DLM`. A card with a complete set and its list needs no image: the app plays the
+where it stopped. When every clip is there, the game starts, and the set gets a list of its
+clips, `SET.DLM`. A card with a complete set and its list needs no image: the app plays the
 clips without it. With neither the image nor a set, the app says what to do, with a QR code that
 opens the web page converting the image on a computer (not online yet).
 
+## Playing
+
+The attract movie plays first, its sound with it. Fire, Space or Return starts a game; M opens
+the start menu, T the high scores, U / D change the volume. The menu also comes up by itself
+after the movie.
+
+In the game, Dirk follows the joystick in port 1 (port 0 is the mouse's) or the cursor keys,
+and swings his sword with fire or Space. A move counts when it is pressed within its window: a
+wrong one, or none, and Dirk dies; one pressed too early is ignored. P pauses (the scene, the
+score and the lives), and Q in the pause leaves the game. U / D change the volume, Esc returns to
+GEM.
+
+The start menu, every option saved on the cartridge:
+
+| Key | Option |
+| --- | --- |
+| H | oldies mode: the move that passes drawn over the picture, an outline before its window, filled while it can still be pressed |
+| I | infinite lives |
+| L | the lives at the start, 1 to 5 |
+| O | the scenes' order: the arcade's (a scene of each row at random) or a fixed one |
+| W | watch mode: the game plays itself (any key or fire: back to the menu) |
+| C | a continue after game over, with a countdown |
+| S | the input sounds: a blip for a move taken, a buzz for one with no window open |
+| A | the timing: relaxed (a move pressed up to 250 ms after its window still passes, the default) or the arcade's |
+| D | after a death: move on to another scene, as the arcade does (the scene comes back later), or retry it |
+| P | the scene to start at |
+| T | the high scores |
+| B | the bench |
+
+Fire, Space or Return in the menu starts a game. The arcade's own secret works too: up and left
+held at the start give infinite lives. A game with a high score asks for its initials (up and
+down change a letter, left and right move, fire or Return ends).
+
 ## The bench
 
-After the ST boots and the clips are ready, the screen shows the card, the folder, the machine and TOS the ST reported,
+B in the game's menu opens the bench. The screen shows the card, the folder, the machine and TOS the ST reported,
 the image (its size, its fragments on the card, its volume), its root directory and the scene
 clips in it. The keys:
 
@@ -51,6 +85,7 @@ clips in it. The keys:
 | C | the game's clips checked and those not there converted, as at every start (Space: stop, or back) |
 | V | the clips: the list of the converted clips of one set (S: the other set; Return: play one; L: play every clip from there to the last, then the run's results; Space: back). While a clip plays: Space pauses it, Left / Right the previous or next clip, S the same clip in the other set at the same frame, O the frame and the times over the picture, U / D the volume (-18 to +18 dB, saved for each sound output), Q stops it and shows the pictures shown and dropped and the times |
 | T / Y | the palette test: two pictures with palettes of their own, sent with the frame (T: only red and green show) or before it, the old way (Y: blue and white flashes); Space: back |
+| G | the game |
 | X | back to Booster, the Multi-device's menu (the ST resets into it) |
 | Esc | back to GEM |
 

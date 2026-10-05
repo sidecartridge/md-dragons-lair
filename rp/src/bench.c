@@ -27,6 +27,7 @@
 #include "convjob.h"
 #include "fb_blit.h"
 #include "game_table.h"
+#include "gameui.h"
 #include "iso9660.h"
 #include "manifest.h"
 #include "mp2_audio.h"
@@ -34,6 +35,7 @@
 #include "mpeg_ps.h"
 #include "palette.h"
 #include "picture16.h"
+#include "player.h"
 #include "qrcodegen.h"
 #include "pico/time.h"
 #include "sdcard.h"
@@ -2133,6 +2135,18 @@ static void conv_finish(int result) {
   s_dirty = true;
 }
 
+// The screen drawn, on the ST before the work behind it starts. At an ST's
+// start the hello comes seconds before its loop takes a frame (the IKBD's
+// reset: 2.8 s on a Mega ST's power-on), and it counts the frame it finds
+// as seen: the screen is published again until the ST shows one.
+static void publish_until_shown(void) {
+  uint32_t t0 = time_us_32();
+  do {
+    fb_publish();
+  } while (!fb_wait_shown(IP_SHOWN_TIMEOUT_US) &&
+           time_us_32() - t0 < CONV_SHOWN_TIMEOUT_US);
+}
+
 // Converts `entry` into its clip file for s_cv.gun_bits: the screen first,
 // then the memory and the job.
 static void conv_begin(const iso9660_entry_t *entry) {
@@ -2142,17 +2156,10 @@ static void conv_begin(const iso9660_entry_t *entry) {
   s_cv.lit = 0;
   f_mkdir(conv_folder(s_cv.gun_bits));  // FR_EXIST when it is there
 
-  // The screen, shown before its memory goes to the converter. At an ST's
-  // start the hello comes seconds before its loop takes a frame (the IKBD's
-  // reset: 2.8 s on a Mega ST's power-on), and it counts the frame it finds
-  // as seen: the screen is published again until the ST shows one.
+  // The screen, shown before its memory goes to the converter.
   conv_draw();
   palette_set(conv_palette(0));
-  uint32_t t0 = time_us_32();
-  do {
-    fb_publish();
-  } while (!fb_wait_shown(IP_SHOWN_TIMEOUT_US) &&
-           time_us_32() - t0 < CONV_SHOWN_TIMEOUT_US);
+  publish_until_shown();
 
   // The small one first: it fits the heap's free block from the boot.
   s_cv.job = malloc(sizeof(convjob_t));
@@ -2268,7 +2275,17 @@ static void conv_all_next(void) {
 static void conv_all_start(bool quiet) {
   if (!benchResults.image_found) {
     if (benchResults.sd_ok && !bench_busy()) {
+      // The same screen while the set is checked against its manifest.
+      memset(&s_cv, 0, sizeof(s_cv));
+      s_cv.all = true;
+      s_cv.checking = true;
+      s_cv.gun_bits = conv_machine_bits();
+      conv_draw();
+      palette_set(conv_palette(0));
+      publish_until_shown();
+      memset(&s_cv, 0, sizeof(s_cv));
       set_check();
+      palette_set(bench_palette);
     }
     return;
   }
@@ -2286,7 +2303,7 @@ static void conv_all_start(bool quiet) {
   s_cv.clip_index = -1;
   conv_draw();
   palette_set(conv_palette(0));
-  fb_publish();
+  publish_until_shown();  // every start shows the clips checked
   iso9660_dir_t dir;
   iso9660_entry_t entry;
   if (iso9660_opendir_root(&s_iso, &dir) == ISO9660_OK) {
@@ -2355,8 +2372,11 @@ static void conv_frame(void) {
   }
 }
 
+static void game_open(void);
+
 // SPACE: a clip converting is stopped (its file closed, left incomplete); a
-// run shows where it got to; from the end's screen, back to the bench.
+// run shows where it got to; from the end's screen, the game when the run
+// made it ready, else back to the bench.
 static void conv_stop(void) {
   if (!s_cv.done && s_cv.job != NULL) {
     convjob_abort(s_cv.job);
@@ -2369,145 +2389,38 @@ static void conv_stop(void) {
     s_dirty = true;
     return;
   }
+  bool ready = s_cv.all && !s_cv.stopped && s_cv.failed == 0;
   s_cv.active = false;
   palette_set(bench_palette);
   s_dirty = true;
+  if (ready) {
+    game_open();  // "THE GAME IS READY": on to it
+  }
 }
 
 // --- Playing a clip file ----------------------------------------------------
 //
 // A scene clip's clip file, as C writes it (BENCH_FOLDER/STE or /ST), played
-// through clipplay.h with its sound; the card at BENCH_FAST_KHZ. The sound
-// leads: the reader pushes each record's samples into a ring the audio
-// takes as a stream (audio_set_pcm_stream()), and the samples the ST has
-// played (audio_source_played()) are the clock. A picture is decoded into
-// fb_chunked_buffer and converted (fb_publish_prepare()) while the one
-// before waits, so the reader runs two records ahead of the screen, the
-// sound well ahead of what is heard. A converted picture goes on the ST
-// (fb_publish_commit()) when the sound reaches its frame less the screen's
-// own delay (PLAY_SCREEN_DELAY: the ST takes it at its next frame, copies
-// it and flips); one more than a frame late is dropped. The times, the
-// pictures shown and dropped, the worst drift and the sound's underruns, on
-// the screen at the end and in playResults over SWD.
-//
-// A clip can start at any frame: from the index's key before it, the
-// records up to it read and decoded, not shown. A pause gives the audio no
-// samples: the output holds its last one and the clock stops with it (a
-// held sample does not count), so the pictures stop too.
+// through player.h with its sound, the card at BENCH_FAST_KHZ and the mouse
+// on while it plays (as the game will have it: every packet takes the ST's
+// time, which must not touch the sound or the pictures). The pictures shown
+// and dropped, the drift, the sound's underruns and the times, on the
+// screen at the end and in playResults over SWD.
 
-#define PLAY_STOPPED 1  // a result: stopped by a key
-#define PLAY_RING 4096u  // the sound read ahead, a power of two
-// Silence after the clip's sound, so that its last samples fill the
-// audio's last unit and are heard, and the writer, which writes ahead of
-// the ST (74 ms on the DMA path), finds samples to the end.
-#define PLAY_TAIL 2048u
-
-// The volume, in 3 dB steps from -18 to +18 dB, kept in the app's settings
-// for each output (saved when the clip stops: writing the flash holds the
-// RP). 0 dB plays the samples as the conversion leveled them; quieter
-// scales them down; louder goes through MP2's soft limiter, as the
-// conversion's level did (mp2_to_pcm8()).
-static const int play_gains[] = {32,  45,  64,  91,   128,  181, 256,
-                                 362, 512, 724, 1024, 1448, 2048};
-#define PLAY_GAINS ((int)(sizeof(play_gains) / sizeof(play_gains[0])))
-#define PLAY_GAIN_0DB 6
-#define PLAY_GAIN_PIECE 98  // samples scaled at a time (882 = 9 x 98)
-#define PLAY_OSD_US 1500000u  // a volume change shown on the pictures
-// Samples between a picture's commit and its showing: 1.5 frames.
-#define PLAY_SCREEN_DELAY (CLIP_SAMPLES * 3u / 2u)
-// The sound starts once this much is read (120 ms): the writer, which writes
-// ahead of the ST (74 ms on the DMA path), then finds it. Started with the
-// first record alone (40 ms), it held the last sample in the clip's first
-// frames: a hole in the sound.
-#define PLAY_PRIME (3u * CLIP_SAMPLES)
-
-typedef struct {
-  FIL f;
-  clipplay_t p;
-  uint8_t buf[CLIPPLAY_BUFFER_BYTES];
-  int8_t ring[PLAY_RING];
-} play_mem_t;
-
+// The bench's clip: what it plays, and its results on the screen.
 static struct {
-  bool active;
-  bool done;
-  bool ended;      // the reader has read the last record
-  uint32_t sound_end;  // the clip's samples, once ended
-  int index;       // the scene clip
-  int bits;        // its set: 3 (ST) or 4 (STE)
+  bool active;   // a clip playing, or its results on the screen
+  bool done;     // its results on the screen
+  bool heard;    // its first sample heard
+  int index;     // the scene clip
+  int bits;      // its set: 3 (ST) or 4 (STE)
   char name[16];
-  char path[32];
-  play_mem_t *m;   // on the heap while it plays
-  uint32_t called;  // play_start()'s time
-  uint32_t t0;
-  uint32_t read_us;  // of the record being read
-  uint64_t sum[3];
-  uint32_t last_us[3];  // the last record's reading and decoding, the last
-                        // picture's publishing
-  volatile uint32_t ring_in;   // samples pushed
-  volatile uint32_t ring_out;  // samples taken by the audio
-  uint32_t first_frame;  // the clip's frame the sound starts at
-  bool first;      // no picture read yet: the first record's is shown
-                   // whatever its kind (held, after a start at a frame)
-  bool next;       // fb_chunked_buffer holds the picture of next_frame
-  uint32_t next_frame;
-  uint16_t next_palette[16];
-  bool ready;      // a converted picture waits, for ready_frame
-  uint32_t ready_frame;
-  uint32_t shown_frame;  // the last picture committed
-  bool heard;      // the clip's sound has begun
-  bool paused;
-  bool priming;    // the sound held back until PLAY_PRIME samples are read
-  uint32_t pause_underruns, pause_late;  // the counters when it paused
-  uint32_t underruns0, late0;
-  int gain;          // play_gains' index
-  bool gain_changed; // to be saved
-  uint32_t osd_until;  // the volume shown on the pictures until then
-  bool osd_up;
-  uint8_t next_bright;  // next picture's brightest entry, for the text
-  // Where the sound's underruns and the late pictures fall.
-  uint32_t last_pass;   // the previous pass of play_frame()
-  uint32_t last_heard;
-  uint32_t seen_underruns;
-  uint32_t due_at;      // when the picture waiting became due (0: not yet)
-  bool ack_waited;      // and the ST had not copied the one before
+  char path[40];
 } s_play;
 
-// A picture this late, against its due time, is counted (and logged).
-#define PLAY_LATE_US 40000
-// A record's reading this slow is counted.
-#define PLAY_SLOW_READ_US 10000u
-
-// The last clip played, readable over SWD as well as on the screen. Times
-// in microseconds: minimum, mean and maximum, a record (reading, decoding)
-// or a picture (converting and committing). The drift: how far from its
-// due sample count the sound was when a picture went on the ST, at worst.
-typedef struct {
-  int result;  // 0: to the end, PLAY_STOPPED, or negative: an error
-  uint32_t frames;    // records read
-  uint32_t pictures;  // shown
-  uint32_t dropped;   // more than a frame late
-  uint32_t pieces;
-  uint32_t read_us[3];
-  uint32_t decode_us[3];
-  uint32_t publish_us[3];
-  uint32_t total_ms;
-  int32_t drift_us[2];  // the earliest and the latest commit, against due
-                        // (the first picture waits for the sound to begin)
-  int volume_db;
-  uint32_t underruns;   // of the sound until its last sample (audioUnderruns)
-  uint32_t late_slices; // audioLateSlices, the same
-  int32_t lead_ms;      // the sound read ahead of what was heard, at least
-                        // (from the first picture shown)
-  uint32_t start_ms;    // from the start to the first sample heard
-  uint32_t open_us;     // the file opened and its header read
-  uint32_t seek_us;     // to the frame asked for: the key, then the records
-  uint32_t slow_reads;  // records read in over PLAY_SLOW_READ_US
-  uint32_t late;        // pictures committed over PLAY_LATE_US late
-} play_results_t;
-
-__attribute__((used)) play_results_t playResults;
-extern uint32_t audioUnderruns, audioLateSlices;
+// The player's thresholds, shown with its counts.
+#define PLAY_SLOW_READ_MS 10
+#define PLAY_LATE_MS 40
 
 // --- The clip list and the soak run ------------------------------------------
 //
@@ -2563,47 +2476,6 @@ typedef struct {
 
 __attribute__((used)) soak_results_t soakResults;
 
-static int play_read(void *ctx, uint8_t *buf, uint32_t len) {
-  UINT got = 0;
-  uint32_t t0 = time_us_32();
-  FRESULT fr = f_read((FIL *)ctx, buf, len, &got);
-  s_play.read_us += time_us_32() - t0;
-  return fr == FR_OK ? (int)got : -1;
-}
-
-static int play_seek(void *ctx, uint32_t offset) {
-  return f_lseek((FIL *)ctx, offset) == FR_OK ? 0 : -1;
-}
-
-// The audio's stream: the ring's samples (taken by audio_render_frame(), on
-// the main loop: never during a push); none while paused or priming.
-static uint32_t play_avail(void) {
-  return (s_play.paused || s_play.priming) ? 0u
-                                           : s_play.ring_in - s_play.ring_out;
-}
-
-static void play_take(int8_t *buf, uint32_t n) {
-  uint32_t out = s_play.ring_out;
-  for (uint32_t i = 0; i < n; i++) {
-    buf[i] = (out + i != s_play.ring_in)
-                 ? s_play.m->ring[(out + i) & (PLAY_RING - 1u)]
-                 : 0;
-  }
-  s_play.ring_out = out + n;
-}
-
-static void play_stat(uint32_t stat[3], uint64_t *sum, uint32_t count,
-                      uint32_t us) {
-  if (count == 1 || us < stat[0]) {
-    stat[0] = us;
-  }
-  if (us > stat[2]) {
-    stat[2] = us;
-  }
-  *sum += us;
-  stat[1] = (uint32_t)(*sum / count);
-}
-
 static void soak_draw(void) {
   const soak_results_t *r = &soakResults;
   text(0, 0, C_TITLE, "PLAYING EVERY CLIP");
@@ -2633,7 +2505,7 @@ static void soak_draw(void) {
         (unsigned long)(r->publish_max_us / 10u % 100u));
   textf(0, 13, C_TEXT, "        %lu READS OVER %lu MS, %lu LATE",
         (unsigned long)r->slow_reads,
-        (unsigned long)(PLAY_SLOW_READ_US / 1000u), (unsigned long)r->late);
+        (unsigned long)PLAY_SLOW_READ_MS, (unsigned long)r->late);
   textf(0, 14, C_TEXT, "GAP     %lu GAPS BETWEEN CLIPS, MS",
         (unsigned long)r->gaps);
   textf(0, 15, C_VALUE, "        MIN %lu  MEAN %lu  MAX %lu",
@@ -2672,9 +2544,9 @@ static void play_draw(void) {
         (unsigned long)r->start_ms);
   textf(0, 17, C_TEXT, "SLOW    %lu READS OVER %lu MS",
         (unsigned long)r->slow_reads,
-        (unsigned long)(PLAY_SLOW_READ_US / 1000u));
+        (unsigned long)PLAY_SLOW_READ_MS);
   textf(0, 18, C_TEXT, "LATE    %lu PICTURES OVER %d MS",
-        (unsigned long)r->late, PLAY_LATE_US / 1000);
+        (unsigned long)r->late, PLAY_LATE_MS);
   text(0, 12, C_DIM, "MS          MIN    MEAN     MAX");
   static const char *const names[3] = {"READ    ", "DECODE  ", "PUBLISH "};
   const uint32_t *stats[3] = {r->read_us, r->decode_us, r->publish_us};
@@ -2688,67 +2560,14 @@ static void play_draw(void) {
   text(0, 24, C_DIM, "SPACE: BACK");
 }
 
-static const char *play_volume_key(void) {
-  return audio_uses_dma() ? ACONFIG_PARAM_VOLUME_DMA : ACONFIG_PARAM_VOLUME_YM;
-}
-
-// The sound's counters, up to now (its last sample, or a stop; while
-// paused, up to the pause: the output held its last sample since).
-static void play_sound_counters(void) {
-  bool held = s_play.paused || s_play.priming;
-  uint32_t underruns = held ? s_play.pause_underruns : audioUnderruns;
-  uint32_t late = held ? s_play.pause_late : audioLateSlices;
-  playResults.underruns = underruns - s_play.underruns0;
-  playResults.late_slices = late - s_play.late0;
-}
-
-// The clip ends: its results kept, the file and the memory released.
-// `chain`: another clip follows at once (the mouse stays on).
+// The clip stops: the player closed, the card back at its speed, and the
+// keyboard alone unless another clip follows (`chain`).
 static void play_close(int result, bool chain) {
-  if (result != 0) {
-    play_sound_counters();  // at the end they were taken at its last sample
-  }
-  audio_set_fill_callback(NULL);  // the stream's ring is about to go
+  player_close(result);
   if (!chain) {
     ikbd_set_input_mode(IKBD_INPUT_KEYBOARD);
   }
-  playResults.volume_db = 3 * (s_play.gain - PLAY_GAIN_0DB);
-  if (s_play.gain_changed) {
-    settings_put_integer(aconfig_getContext(), play_volume_key(),
-                         playResults.volume_db);
-    settings_save(aconfig_getContext(), true);
-    s_play.gain_changed = false;
-  }
-  playResults.result = result;
-  playResults.total_ms = (time_us_32() - s_play.t0) / 1000u;
-  if (s_play.m != NULL) {
-    playResults.pieces = s_play.m->p.pieces;
-    f_close(&s_play.m->f);
-    free(s_play.m);
-    s_play.m = NULL;
-  }
   bench_set_spi_hz(s_configured_hz);
-  DPRINTF("Play %s: result %d, %lu frames, %lu shown, %lu dropped, drift "
-          "%ld..%ld us, %lu late pictures, %lu underruns, %lu late slices, "
-          "start %lu ms; read %lu/%lu/%lu us (%lu slow), decode %lu/%lu/%lu, "
-          "publish %lu/%lu/%lu\n",
-          s_play.path, result, (unsigned long)playResults.frames,
-          (unsigned long)playResults.pictures,
-          (unsigned long)playResults.dropped, (long)playResults.drift_us[0],
-          (long)playResults.drift_us[1], (unsigned long)playResults.late,
-          (unsigned long)playResults.underruns,
-          (unsigned long)playResults.late_slices,
-          (unsigned long)playResults.start_ms,
-          (unsigned long)playResults.read_us[0],
-          (unsigned long)playResults.read_us[1],
-          (unsigned long)playResults.read_us[2],
-          (unsigned long)playResults.slow_reads,
-          (unsigned long)playResults.decode_us[0],
-          (unsigned long)playResults.decode_us[1],
-          (unsigned long)playResults.decode_us[2],
-          (unsigned long)playResults.publish_us[0],
-          (unsigned long)playResults.publish_us[1],
-          (unsigned long)playResults.publish_us[2]);
 }
 
 // The clip ends, its results on the screen.
@@ -2836,75 +2655,37 @@ static void play_end(int result) {
   s_soak.advance = true;
 }
 
-// Reads records while the ring has room for one more's sound and the
-// picture buffer is free: their samples into the ring, a picture decoded
-// into fb_chunked_buffer (then it waits as `next`). Returns 0, or a
-// negative error.
-static int play_read_ahead(void) {
-  play_results_t *r = &playResults;
-  while (!s_play.ended && !s_play.next &&
-         PLAY_RING - (s_play.ring_in - s_play.ring_out) >= CLIP_SAMPLES) {
-    s_play.read_us = 0;
-    uint32_t t0 = time_us_32();
-    clipplay_frame_t f;
-    uint32_t frame = s_play.m->p.frame;
-    int got = clipplay_next(&s_play.m->p, fb_chunked_buffer, &f);
-    uint32_t us = time_us_32() - t0;
-    if (got < 0) {
-      return got;
-    }
-    if (got == 0) {
-      s_play.ended = true;
-      s_play.sound_end = s_play.ring_in;
-      break;
-    }
-    r->frames++;
-    s_play.last_us[0] = s_play.read_us;
-    s_play.last_us[1] = us - s_play.read_us;
-    play_stat(r->read_us, &s_play.sum[0], r->frames, s_play.last_us[0]);
-    if (s_play.last_us[0] > PLAY_SLOW_READ_US) {
-      r->slow_reads++;
-    }
-    play_stat(r->decode_us, &s_play.sum[1], r->frames, s_play.last_us[1]);
-    uint32_t in = s_play.ring_in;
-    int gain = play_gains[s_play.gain];
-    for (uint32_t i = 0; i < CLIP_SAMPLES; i += PLAY_GAIN_PIECE) {
-      int8_t piece[PLAY_GAIN_PIECE];
-      if (gain > 256) {
-        int16_t wide[PLAY_GAIN_PIECE];
-        for (int k = 0; k < PLAY_GAIN_PIECE; k++) {
-          wide[k] = (int16_t)(f.sound[i + k] * 256);
-        }
-        mp2_to_pcm8(wide, piece, PLAY_GAIN_PIECE, gain);
-      } else {
-        for (int k = 0; k < PLAY_GAIN_PIECE; k++) {
-          piece[k] = (int8_t)((f.sound[i + k] * gain) >> 8);
-        }
-      }
-      for (int k = 0; k < PLAY_GAIN_PIECE; k++) {
-        s_play.m->ring[(in + i + k) & (PLAY_RING - 1u)] = piece[k];
-      }
-    }
-    s_play.ring_in = in + CLIP_SAMPLES;
-    if (f.kind != CLIP_HELD || s_play.first) {
-      int bright = 0;
-      int bright_luma = -1;
-      for (int e = 0; e < 16; e++) {
-        uint16_t c = f.palette[e];
-        int luma = 2 * ((c >> 8) & 15) + 5 * ((c >> 4) & 15) + (c & 15);
-        if (luma > bright_luma) {
-          bright = e;
-          bright_luma = luma;
-        }
-        s_play.next_palette[e] = picture16_ste_word(c);
-      }
-      s_play.next_bright = (uint8_t)bright;
-      s_play.next = true;
-      s_play.next_frame = frame;
-      s_play.first = false;
-    }
+// The clip, its frame and the times, over the picture (O).
+static void play_overlay(uint32_t frame, uint8_t bright) {
+  if (!s_clips.overlay) {
+    return;
   }
-  return 0;
+  char line[2][COLS + 1];
+  int n = snprintf(line[0], sizeof(line[0]), "%s %s %lu/%lu", s_play.name,
+                   s_play.bits == 4 ? "STE" : "ST", (unsigned long)frame,
+                   (unsigned long)player_frames());
+  if (s_soak.active) {
+    n += snprintf(line[0] + n, sizeof(line[0]) - (size_t)n, " SOAK %d",
+                  soakResults.clips + 1);
+  }
+  if (player_paused()) {
+    snprintf(line[0] + n, sizeof(line[0]) - (size_t)n, " PAUSED");
+  }
+  uint32_t us[3];
+  player_last_times(us);
+  snprintf(line[1], sizeof(line[1]), "R%lu.%lu D%lu.%lu P%lu.%lu DROP %lu SD %lu",
+           (unsigned long)(us[0] / 1000u), (unsigned long)(us[0] / 100u % 10u),
+           (unsigned long)(us[1] / 1000u), (unsigned long)(us[1] / 100u % 10u),
+           (unsigned long)(us[2] / 1000u), (unsigned long)(us[2] / 100u % 10u),
+           (unsigned long)playResults.dropped,
+           (unsigned long)player_card_kbs());
+  font_set_font(&font8x8);
+  for (int i = 0; i < 2; i++) {
+    fb_fill_rect(8, 4 + 10 * i, 8 * (int)strlen(line[i]) + 8, 10, 0);
+    font_set_color(bright);
+    font_move(12, 5 + 10 * i);
+    font_print(line[i]);
+  }
 }
 
 // Plays scene clip `index` of set `bits` (0: the machine's, else the
@@ -2928,106 +2709,38 @@ static void play_start(int index, int bits, uint32_t frame, bool paused) {
     return;
   }
   memset(&s_play, 0, sizeof(s_play));
-  memset(&playResults, 0, sizeof(playResults));
   s_play.active = true;
   s_play.index = index;
-  s_play.called = time_us_32();
-  s_play.t0 = s_play.called;
-  s_play.paused = paused;
   snprintf(s_play.name, sizeof(s_play.name), "%.*s",
            (int)(strlen(clip_name) - 4), clip_name);
   if (s_clips.active) {
     s_clips.sel = index;
   }
-  s_play.m = malloc(sizeof(play_mem_t));
-  if (s_play.m == NULL) {
-    play_end(-100);
-    return;
-  }
   // The set asked for; with none, the machine's, else the other's.
   s_play.bits = bits != 0 ? bits : conv_machine_bits();
   conv_path(s_play.path, sizeof(s_play.path), s_play.bits, clip_name);
-  FRESULT fr = f_open(&s_play.m->f, s_play.path, FA_READ);
-  if (fr != FR_OK && bits == 0) {
+  bench_set_spi_hz(BENCH_FAST_KHZ * 1000u);
+  player_set_overlay(play_overlay);
+  int r = player_start(s_play.path, frame, paused);
+  if (r == CLIPPLAY_ERR_IO && bits == 0) {
     s_play.bits = 7 - s_play.bits;
     conv_path(s_play.path, sizeof(s_play.path), s_play.bits, clip_name);
-    fr = f_open(&s_play.m->f, s_play.path, FA_READ);
-  }
-  if (fr != FR_OK) {
-    free(s_play.m);
-    s_play.m = NULL;
-    play_end(CLIPPLAY_ERR_IO);
-    return;
-  }
-  bench_set_spi_hz(BENCH_FAST_KHZ * 1000u);
-  SettingsConfigEntry *volume =
-      settings_find_entry(aconfig_getContext(), play_volume_key());
-  int db = volume != NULL ? atoi(volume->value) : 0;
-  s_play.gain = PLAY_GAIN_0DB + db / 3;
-  s_play.gain = s_play.gain < 0                ? 0
-                : s_play.gain >= PLAY_GAINS ? PLAY_GAINS - 1
-                                            : s_play.gain;
-  clipplay_io_t io = {play_read, play_seek, &s_play.m->f};
-  clipplay_t *p = &s_play.m->p;
-  int r = clipplay_open(p, &io, s_play.m->buf);
-  playResults.open_us = time_us_32() - s_play.called;
-  uint32_t seek_t0 = time_us_32();
-  // From a frame: the key before it, then the records up to it decoded.
-  if (r == 0 && frame > 0) {
-    if (frame >= p->header.frames) {
-      frame = p->header.frames - 1u;
-    }
-    int key = clipplay_start(p, frame);
-    r = key < 0 ? key : 0;
-    clipplay_frame_t f;
-    while (r == 0 && p->frame < frame) {
-      int got = clipplay_next(p, fb_chunked_buffer, &f);
-      r = got < 0 ? got : (got == 0 ? CLIPPLAY_ERR_RECORD : 0);
-    }
-  }
-  playResults.seek_us = time_us_32() - seek_t0;
-  s_play.first_frame = p->frame;
-  s_play.first = true;
-  if (r == 0) {
-    r = play_read_ahead();  // the first picture and its sound
+    r = player_start(s_play.path, frame, paused);
   }
   if (r < 0) {
     play_end(r);
     return;
   }
-  DPRINTF("Play %s from frame %lu: %lu frames; opened in %lu us, at the "
-          "frame in %lu us\n",
-          s_play.path, (unsigned long)s_play.first_frame,
-          (unsigned long)p->header.frames, (unsigned long)playResults.open_us,
-          (unsigned long)playResults.seek_us);
-  s_play.underruns0 = audioUnderruns;
-  s_play.late0 = audioLateSlices;
-  s_play.pause_underruns = audioUnderruns;
-  s_play.pause_late = audioLateSlices;
-  s_play.seen_underruns = audioUnderruns;
-  playResults.drift_us[0] = INT32_MAX;
-  playResults.drift_us[1] = INT32_MIN;
-  playResults.lead_ms = INT32_MAX;
-  s_play.t0 = time_us_32();
-  s_play.priming = true;
-  audio_set_pcm_stream(play_take, play_avail, CLIP_SAMPLE_RATE);
-  // The mouse on while it plays, as the game will have it: every packet
-  // takes the ST's time, which must not touch the sound or the pictures.
   ikbd_set_input_mode(IKBD_INPUT_MOUSE);
-}
-
-// The clip's frame on the screen now.
-static uint32_t play_frame_shown(void) {
-  return playResults.pictures > 0 ? s_play.shown_frame : s_play.first_frame;
 }
 
 // Another clip, or the same in the other set, at once: the one playing
 // stops without its results screen.
 static void play_switch(int index, int bits, uint32_t frame) {
-  bool paused = s_play.paused;
-  play_close(PLAY_STOPPED, true);
+  bool paused = player_paused();
+  play_close(PLAYER_STOPPED, true);
   if (s_soak.active) {
-    soak_record(PLAY_STOPPED);
+    soak_record(PLAYER_STOPPED);
     s_soak.index = index;
     s_soak.ended_at = 0;
   }
@@ -3035,60 +2748,8 @@ static void play_switch(int index, int bits, uint32_t frame) {
   play_start(index, bits, frame, paused);
 }
 
-static void play_pause(bool paused) {
-  if (paused == s_play.paused || s_play.done) {
-    return;
-  }
-  if (paused) {
-    s_play.pause_underruns = audioUnderruns;
-    s_play.pause_late = audioLateSlices;
-  } else {
-    // The output held its last sample while paused: not an underrun.
-    s_play.underruns0 += audioUnderruns - s_play.pause_underruns;
-    s_play.late0 += audioLateSlices - s_play.pause_late;
-  }
-  s_play.paused = paused;
-}
-
-// The clip, its frame and the times, over the picture (O).
-static void play_overlay(void) {
-  const play_results_t *r = &playResults;
-  char line[2][COLS + 1];
-  int n = snprintf(line[0], sizeof(line[0]), "%s %s %lu/%lu", s_play.name,
-                   s_play.bits == 4 ? "STE" : "ST",
-                   (unsigned long)s_play.next_frame,
-                   (unsigned long)s_play.m->p.header.frames);
-  if (s_soak.active) {
-    n += snprintf(line[0] + n, sizeof(line[0]) - (size_t)n, " SOAK %d",
-                  soakResults.clips + 1);
-  }
-  if (s_play.paused) {
-    snprintf(line[0] + n, sizeof(line[0]) - (size_t)n, " PAUSED");
-  }
-  uint32_t kbs = s_play.sum[0] > 0
-                     ? (uint32_t)((uint64_t)s_play.m->p.pieces *
-                                  CLIPPLAY_PIECE * 1000000u / 1024u /
-                                  s_play.sum[0])
-                     : 0u;
-  snprintf(line[1], sizeof(line[1]), "R%lu.%lu D%lu.%lu P%lu.%lu DROP %lu SD %lu",
-           (unsigned long)(s_play.last_us[0] / 1000u),
-           (unsigned long)(s_play.last_us[0] / 100u % 10u),
-           (unsigned long)(s_play.last_us[1] / 1000u),
-           (unsigned long)(s_play.last_us[1] / 100u % 10u),
-           (unsigned long)(s_play.last_us[2] / 1000u),
-           (unsigned long)(s_play.last_us[2] / 100u % 10u),
-           (unsigned long)r->dropped, (unsigned long)kbs);
-  font_set_font(&font8x8);
-  for (int i = 0; i < 2; i++) {
-    fb_fill_rect(8, 4 + 10 * i, 8 * (int)strlen(line[i]) + 8, 10, 0);
-    font_set_color(s_play.next_bright);
-    font_move(12, 5 + 10 * i);
-    font_print(line[i]);
-  }
-}
-
-// Every pass of the main loop: the clock moves the pictures on; the reader
-// keeps the sound ahead.
+// Every pass of the main loop: the player on; the soak run's gap measured
+// at the clip's first sample heard.
 static void play_frame(void) {
   if (s_play.done) {
     if (s_dirty) {
@@ -3098,35 +2759,12 @@ static void play_frame(void) {
     fb_publish();
     return;
   }
-  play_results_t *r = &playResults;
-  uint32_t heard = audio_source_played();
-  uint32_t now = time_us_32();
-  uint32_t pass_us = now - s_play.last_pass;
-  uint32_t heard_step = heard - s_play.last_heard;
-  s_play.last_pass = now;
-  s_play.last_heard = heard;
-  // An underrun while it plays: where it falls, and what the reader had.
-  if (audioUnderruns != s_play.seen_underruns) {
-    if (!s_play.paused && !s_play.priming) {
-      DPRINTF("Underrun in %s at frame %lu%s: %ld samples ahead of the ear, "
-              "%lu in the ring; last read %lu us, decode %lu us; pass %lu "
-              "us\n",
-              s_play.name,
-              (unsigned long)(s_play.first_frame + heard / CLIP_SAMPLES),
-              s_play.heard ? "" : " (before its first sound)",
-              (long)(int32_t)(s_play.ring_in - heard),
-              (unsigned long)(s_play.ring_in - s_play.ring_out),
-              (unsigned long)s_play.last_us[0],
-              (unsigned long)s_play.last_us[1], (unsigned long)pass_us);
-    }
-    s_play.seen_underruns = audioUnderruns;
-  }
-  if (heard > 0 && !s_play.heard) {
+  int r = player_frame();
+  if (!s_play.heard && player_heard_ms() > 0) {
     s_play.heard = true;
-    r->start_ms = (now - s_play.called) / 1000u;
     if (s_soak.active && s_soak.ended_at != 0) {
       soak_results_t *s = &soakResults;
-      uint32_t gap = now - s_soak.ended_at;
+      uint32_t gap = time_us_32() - s_soak.ended_at;
       s->gaps++;
       s_soak.gap_sum += gap;
       if (s->gaps == 1 || gap < s->gap_us[0]) {
@@ -3139,113 +2777,8 @@ static void play_frame(void) {
       s_soak.ended_at = 0;
     }
   }
-  if (r->pictures > 0 && !s_play.ended) {
-    int32_t lead = (int32_t)((int64_t)(int32_t)(s_play.ring_in - heard) * 1000 /
-                             CLIP_SAMPLE_RATE);
-    r->lead_ms = lead < r->lead_ms ? lead : r->lead_ms;
-  }
-  // The converted picture: on the ST when the sound reaches its frame less
-  // the screen's delay (the first at once, while the sound is held back);
-  // dropped when the sound is past its frame's end.
-  if (s_play.ready &&
-      (heard > 0 || ((s_play.paused || s_play.priming) && r->pictures == 0))) {
-    uint32_t due = (s_play.ready_frame - s_play.first_frame) * CLIP_SAMPLES;
-    if (heard + PLAY_SCREEN_DELAY >= due) {
-      if (s_play.due_at == 0) {
-        s_play.due_at = now;
-      }
-      if (!fb_publish_ready()) {
-        s_play.ack_waited = true;
-      }
-    }
-    if (heard >= due + CLIP_SAMPLES + PLAY_SCREEN_DELAY) {
-      s_play.ready = false;
-      r->dropped++;
-    } else if (heard + PLAY_SCREEN_DELAY >= due && fb_publish_ready()) {
-      // Only once the ST has copied the picture before: waiting for it here
-      // would stop the sound's top-up (an ST slowed by the mouse).
-      uint32_t t0 = time_us_32();
-      fb_publish_commit();
-      s_play.last_us[2] = time_us_32() - t0;
-      play_stat(r->publish_us, &s_play.sum[2], ++r->pictures,
-                s_play.last_us[2]);
-      int32_t drift = (int32_t)((int64_t)((int32_t)(heard + PLAY_SCREEN_DELAY -
-                                                     due)) *
-                                1000000 / CLIP_SAMPLE_RATE);
-      if (s_play.ready_frame > s_play.first_frame && drift < r->drift_us[0]) {
-        r->drift_us[0] = drift;
-      }
-      if (s_play.ready_frame > s_play.first_frame && drift > r->drift_us[1]) {
-        r->drift_us[1] = drift;
-      }
-      if (s_play.ready_frame > s_play.first_frame && drift > PLAY_LATE_US) {
-        r->late++;
-        DPRINTF("Late picture in %s, frame %lu: %ld us; due %lu us before, "
-                "%s; pass %lu us, the sound +%lu samples in it\n",
-                s_play.name, (unsigned long)s_play.ready_frame, (long)drift,
-                (unsigned long)(now - s_play.due_at),
-                s_play.ack_waited ? "the ST still copying the one before"
-                                  : "the ST ready",
-                (unsigned long)pass_us, (unsigned long)heard_step);
-      }
-      s_play.shown_frame = s_play.ready_frame;
-      s_play.ready = false;
-    }
-  }
-  // The decoded picture converted (with the volume, or the overlay, over
-  // it: in the palette's black, entry 0, and its brightest), then the
-  // reader on.
-  if (!s_play.ready && s_play.next) {
-    if (s_clips.overlay) {
-      play_overlay();
-    }
-    if ((int32_t)(s_play.osd_until - time_us_32()) > 0) {
-      char line[24];
-      snprintf(line, sizeof(line), "VOLUME %s %+d DB",
-               s_play.osd_up ? "UP" : "DOWN",
-               3 * (s_play.gain - PLAY_GAIN_0DB));
-      fb_fill_rect(8, 182, 8 * (int)strlen(line) + 8, 12, 0);
-      font_set_font(&font8x8);
-      font_set_color(s_play.next_bright);
-      font_move(12, 184);
-      font_print(line);
-    }
-    palette_set_frame(s_play.next_palette);
-    fb_publish_prepare();
-    s_play.due_at = 0;
-    s_play.ack_waited = false;
-    s_play.ready = true;
-    s_play.ready_frame = s_play.next_frame;
-    s_play.next = false;
-  }
-  int err = play_read_ahead();
-  if (err < 0) {
-    play_end(err);
-    return;
-  }
-  // The sound starts once PLAY_PRIME samples are read, or all of a shorter
-  // clip; the last sample held meanwhile is no underrun, up to the FIFO's
-  // first top-up.
-  if (s_play.priming &&
-      (s_play.ring_in - s_play.ring_out >= PLAY_PRIME || s_play.ended)) {
-    s_play.priming = false;
-    audio_render_frame();
-    s_play.underruns0 = s_play.pause_underruns = audioUnderruns;
-    s_play.late0 = s_play.pause_late = audioLateSlices;
-    s_play.seen_underruns = audioUnderruns;
-  }
-  // The end: everything read and shown, the clip's sound heard; silence
-  // after it, as the ring has room.
-  if (s_play.ended) {
-    while (s_play.ring_in - s_play.sound_end < PLAY_TAIL &&
-           s_play.ring_in - s_play.ring_out < PLAY_RING) {
-      s_play.m->ring[s_play.ring_in & (PLAY_RING - 1u)] = 0;
-      s_play.ring_in++;
-    }
-    if (!s_play.ready && !s_play.next && heard >= s_play.sound_end) {
-      play_sound_counters();
-      play_end(0);
-    }
+  if (r <= 0) {
+    play_end(r);
   }
 }
 
@@ -3254,15 +2787,15 @@ static void play_frame(void) {
 static void play_stop(void) {
   if (s_soak.active) {
     if (s_play.active) {
-      play_close(PLAY_STOPPED, true);
-      soak_record(PLAY_STOPPED);
+      play_close(PLAYER_STOPPED, true);
+      soak_record(PLAYER_STOPPED);
       s_play.active = false;
     }
     soak_finish(true);
     return;
   }
   if (!s_play.done) {
-    play_finish(PLAY_STOPPED);  // to its screen
+    play_finish(PLAYER_STOPPED);  // to its screen
     return;
   }
   s_play.active = false;
@@ -3411,7 +2944,7 @@ static void clips_key(uint8_t scancode) {
     }
     switch (scancode) {
       case 0x39:  // space: pause, or on again
-        play_pause(!s_play.paused);
+        player_pause(!player_paused());
         break;
       case 0x10:  // Q: stop
         play_stop();
@@ -3428,26 +2961,16 @@ static void clips_key(uint8_t scancode) {
                     s_play.bits, 0);
         break;
       case 0x1F:  // S: the other set, at the same frame
-        play_switch(s_play.index, 7 - s_play.bits, play_frame_shown());
+        play_switch(s_play.index, 7 - s_play.bits, player_frame_shown());
         break;
       case 0x18:  // O: the overlay, from the next picture
         s_clips.overlay = !s_clips.overlay;
         break;
       case 0x16:  // U: 3 dB louder, from the next samples read
-        if (s_play.gain + 1 < PLAY_GAINS) {
-          s_play.gain++;
-          s_play.gain_changed = true;
-        }
-        s_play.osd_until = time_us_32() + PLAY_OSD_US;
-        s_play.osd_up = true;
+        player_volume(+1);
         break;
       case 0x20:  // D: 3 dB quieter
-        if (s_play.gain > 0) {
-          s_play.gain--;
-          s_play.gain_changed = true;
-        }
-        s_play.osd_until = time_us_32() + PLAY_OSD_US;
-        s_play.osd_up = false;
+        player_volume(-1);
         break;
       default:
         break;
@@ -3557,7 +3080,8 @@ static void pal_stop(void) {
 // interrupt (the sound test it stops itself).
 static bool bench_busy(void) {
   return s_test.running || s_test.pending || s_show.active || s_ip.active ||
-         s_cv.active || s_play.active || s_clips.active || s_pal.active;
+         s_cv.active || s_play.active || s_clips.active || s_pal.active ||
+         gameui_active();
 }
 
 // --- Public -----------------------------------------------------------------
@@ -3596,7 +3120,48 @@ void bench_start_sd(void) {
   s_dirty = true;
 }
 
+// --- The game -------------------------------------------------------------------
+//
+// The game (gameui.h) starts once the machine's clips are there: at an ST's
+// start after the clips' check (with the image, every clip current; without
+// it, a complete set), or on G. B in its menu comes back to the bench.
+
+static void game_clip_path(char *out, unsigned size, const char *clip) {
+  int bits = benchResults.image_found ? conv_machine_bits() : s_set.gun_bits;
+  conv_path(out, size, bits, clip);
+}
+
+static void game_card_fast(bool fast) {
+  bench_set_spi_hz(fast ? BENCH_FAST_KHZ * 1000u : s_configured_hz);
+}
+
+static void game_to_bench(void) {
+  palette_set(bench_palette);
+  s_dirty = true;
+}
+
+static const gameui_host_t game_host = {game_clip_path, game_card_fast,
+                                        game_to_bench};
+
+static void game_open(void) {
+  // Every clip of the set: with the image, its manifest (written once all
+  // are converted); without it, the set found complete.
+  manifest_header_t mh;
+  bool complete = benchResults.image_found
+                      ? manifest_current(conv_machine_bits(), &mh)
+                      : s_set.ready;
+  if (!clips_available() || !complete || bench_busy()) {
+    return;
+  }
+  if (s_sound.active) {
+    sound_stop();
+  }
+  gameui_start(&game_host);
+}
+
 void bench_restart(void) {
+  // A game going on stops: the session starts again.
+  gameui_stop();
   // A conversion still running is stopped: its screen cannot be drawn again
   // (it works in the framebuffers' memory). The check below carries it on.
   if (s_cv.active) {
@@ -3609,7 +3174,7 @@ void bench_restart(void) {
   // A clip playing stops: the sound's clock starts again with the session.
   if (s_play.active) {
     if (!s_play.done) {
-      play_finish(PLAY_STOPPED);
+      play_finish(PLAYER_STOPPED);
     }
     s_play.active = false;
   }
@@ -3619,8 +3184,11 @@ void bench_restart(void) {
   palette_set(s_show.active ? show_palette() : bench_palette);
   s_dirty = true;
   // Every start checks the game's clips for this machine: those missing are
-  // converted; when all are there the bench (the game, later) goes on.
+  // converted; when all are there, the game.
   conv_all_start(true);
+  if (!s_cv.active) {
+    game_open();
+  }
 }
 
 void bench_stop_card_work(void) {
@@ -3633,6 +3201,10 @@ void bench_stop_card_work(void) {
 }
 
 void bench_handle_key(const ikbd_key_event_t *key) {
+  if (gameui_active()) {
+    gameui_key(key);  // presses and releases
+    return;
+  }
   if (!key->is_press || s_test.running || s_test.pending) {
     return;
   }
@@ -3765,6 +3337,9 @@ void bench_handle_key(const ikbd_key_event_t *key) {
     case 0x2F:  // V: the clips, to play them
       clips_open();
       break;
+    case 0x22:  // G: the game
+      game_open();
+      break;
     case 0x14:  // T: the palette test, palettes with their frames
       pal_start(true);
       break;
@@ -3780,6 +3355,10 @@ void bench_handle_key(const ikbd_key_event_t *key) {
 }
 
 void bench_frame(void) {
+  if (gameui_active()) {
+    gameui_frame();
+    return;
+  }
   if (s_test.running && !s_test.redraw) {
     bench_test_slice();
     return;
@@ -3884,6 +3463,24 @@ uint32_t bench_devhook(uint16_t command_id, const uint16_t *payload,
           s_set.stale = payload[0] == 2;
           benchResults.clips = 0;
         }
+      }
+      return 1;
+    case DEVHOOKS_APP_GAME:
+      if (gameui_active()) {
+        gameui_stop();
+        game_to_bench();
+      } else {
+        game_open();
+      }
+      return 1;
+    case DEVHOOKS_APP_GAME_BOT:
+      if (payload_size >= 2u) {
+        if (!gameui_active()) {
+          game_open();
+        }
+        gameui_bot((int)payload[0], payload_size >= 4u && payload[1] != 0);
+      } else {
+        gameui_bot(-1, false);
       }
       return 1;
     case DEVHOOKS_APP_SOAK:

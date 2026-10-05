@@ -69,6 +69,8 @@ int main(void) {
     if (seq->flags & GAME_SEQ_NOT_ON_CD) {
       not_on_cd++;
       CHECK_EQ(s, game_attract_scene);
+      // A picture held, never a clip played: the game shows its menu instead.
+      CHECK(seq->flags & GAME_SEQ_SINGLE_FRAME);
       continue;
     }
     if (seq->clip != GAME_CLIP_NONE) {
