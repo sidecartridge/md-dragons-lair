@@ -1,10 +1,11 @@
 {
   "uuid": "<APP_UUID>",
   "name": "Dragon's Lair",
-  "description": "The laserdisc game on the Atari ST, STE and Mega ST(E): its video and sound converted by the cartridge from your own copy of the CD-ROM image on the SD card. Work in progress.",
-  "image": "https://placehold.co/256x256/png",
+  "description": "1983: a laserdisc, Don Bluth's hand-drawn cartoon and two quarters a go. Now Dirk the Daring braves the dragon's lair to rescue Princess Daphne on your Atari ST, STE, Mega ST or Mega STE, sound and all, from your own Dragon's Lair CD-ROM. <a target='_blank' href='https://docs.sidecartridge.com/sidecartridge-multidevice/microfirmwares/dragons-lair/'>Learn more</a>",
+  "image": "https://raw.githubusercontent.com/sidecartridge/md-dragons-lair/main/icon.png",
   "tags": [
-    "Game"
+    "Game",
+    "Laserdisc"
   ],
   "devices": [
     "ST",

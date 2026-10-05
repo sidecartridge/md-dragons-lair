@@ -1,4 +1,14 @@
+<div align="center">
+
+<img src="icon.png" alt="SidecarTridge Multi-device Dragon's Lair" width="180" />
+
 # Dragon's Lair for the SidecarTridge Multi-device
+
+[![Build](https://github.com/sidecartridge/md-dragons-lair/actions/workflows/build.yml/badge.svg)](https://github.com/sidecartridge/md-dragons-lair/actions/workflows/build.yml)
+[![Release](https://github.com/sidecartridge/md-dragons-lair/actions/workflows/release.yml/badge.svg)](https://github.com/sidecartridge/md-dragons-lair/actions/workflows/release.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+
+</div>
 
 Dragon's Lair, the laserdisc game, on an Atari ST, STE, Mega ST or Mega STE with a
 [SidecarTridge Multi-device](https://sidecartridge.com) in its cartridge slot. The Raspberry Pi
