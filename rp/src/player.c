@@ -94,7 +94,9 @@ static struct {
   uint32_t underruns0, late0;
   int gain;          // play_gains' index
   bool gain_changed; // to be saved
-  uint32_t osd_until;  // the volume shown on the pictures until then
+  // The volume shown on the pictures until then (time_us_64(): 0 is never;
+  // a 32-bit time against 0 read as ahead for half of its 71-minute turn).
+  uint64_t osd_until;
   bool osd_up;
   uint8_t next_bright;  // next picture's brightest entry, for the text
   player_overlay_fn overlay;
@@ -438,7 +440,7 @@ void player_volume(int step) {
       s_play.gain_changed = true;
     }
   }
-  s_play.osd_until = time_us_32() + PLAY_OSD_US;
+  s_play.osd_until = time_us_64() + PLAY_OSD_US;
   s_play.osd_up = step > 0;
 }
 
@@ -543,7 +545,7 @@ int player_frame(void) {
     if (s_play.overlay != NULL) {
       s_play.overlay(s_play.next_frame, s_play.next_bright);
     }
-    if ((int32_t)(s_play.osd_until - time_us_32()) > 0) {
+    if (time_us_64() < s_play.osd_until) {
       char line[24];
       snprintf(line, sizeof(line), "VOLUME %s %+d DB",
                s_play.osd_up ? "UP" : "DOWN",
