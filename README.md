@@ -103,8 +103,8 @@ second; `APP_PROFILE=PROFILE_50FPS ./build.sh ...` builds the 50 fps profile.
   to `main` or a release branch publishes it at <https://md-dragons-lair.sidecartridge.com>,
   each converter version in its own folder.
 - With a Raspberry Pi Debug Probe on the cartridge's SWD and debug UART, `tools/dev/` builds,
-  flashes and checks the firmware, captures its console and drives the bench from the host:
-  see [`tools/dev/README.md`](tools/dev/README.md).
+  flashes and checks the firmware, captures its console and drives a debug build's bench from
+  the host: see [`tools/dev/README.md`](tools/dev/README.md).
 
 ## How it is made
 

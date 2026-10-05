@@ -173,6 +173,7 @@ Games in watch mode do not enter the table.
   missing, or were made by an older converter: make them again (see
   [the clips on the card](#the-clips-on-the-card)), or leave the image on the card and let the
   cartridge convert what is needed.
+- **The screen says NO SD CARD.** Put the card in the Multi-device and switch the ST off and on.
 - **The screen says some clips are not converted yet.** A conversion was stopped, or a clip
   failed (a full card): C converts those missing, or the next start does.
 - **The joystick does nothing.** It must be in the joystick port, not the mouse's.

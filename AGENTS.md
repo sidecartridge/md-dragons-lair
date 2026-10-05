@@ -2,7 +2,7 @@
 
 Welcome to the md-dragons-lair workspace, created from md-framebuffer-template v1.1.0. This is the quick primer so any agent can get productive fast. `CLAUDE.md` is the full reference (architecture, shared-region map, pipelines, tests); where the two disagree, `CLAUDE.md` and the code win.
 
-The app is Dragon's Lair for the SidecarTridge Multi-device: the RP2040 reads the game's clips (MPEG-1 video, MP2 sound) from the user's own CD-ROM image on the SD card (`/DLAIR`), decodes and converts them to 320×200 in 16 colours, and the ST shows them at 25 fps. For now the firmware is a bench (`rp/src/bench.c`): it lists the image, measures the card, and decodes, shows and plays a clip. The decoders and the converter are plain C with Thumb assembly hot loops (`iso9660.c`, `mpeg_ps.c`, `mpeg1_video.c`, `mp2_audio.c`, `picture16.c`); `tools/dlconv/` runs the same code on a PC.
+The app is Dragon's Lair for the SidecarTridge Multi-device: the RP2040 reads the game's clips (MPEG-1 video, MP2 sound) from the user's own CD-ROM image on the SD card (`/DLAIR`), decodes and converts them to 320×200 in 16 colours, and the ST shows them at 25 fps. At every start it checks the clips, converts those missing and opens the game (`rp/src/gameui.c`, over the engine `rp/src/game.c`); in a debug build the game's menu also opens the bench (`rp/src/bench.c`), which lists the image, measures the card, and decodes, shows and plays a clip. The decoders and the converter are plain C with Thumb assembly hot loops (`iso9660.c`, `mpeg_ps.c`, `mpeg1_video.c`, `mp2_audio.c`, `picture16.c`); `tools/dlconv/` runs the same code on a PC.
 
 ## 1. Environment setup (do this before touching the repo)
 - **Host tooling**
@@ -48,7 +48,7 @@ python3 tools/dev/tools_harness.py --build --flash --reset
 - Expect harmless VASM warnings (`target data type overflow`, `trailing garbage after option -D`).
 - The build script auto-copies `version.txt`, rebuilds the Atari target, then the RP target. A fresh clone has empty submodule folders: the first `./build.sh` clones and pins them.
 - Successful builds drop the UF2 into `dist/` as `<UUID>-<version>.uf2` (`version.txt` already carries the `v`) and print the MD5 used in the generated JSON manifest.
-- Use the development UUID `44444444-4444-4444-8444-444444444444` for local builds: any other UUID has no config sector and the app jumps to Booster.
+- Use the development UUID `44444444-4444-4444-8444-444444444444` for every local build, release builds too, until the app is published in the store: any other UUID has no config sector and the app jumps to Booster.
 - The Atari cartridge image (header + m68k code) must fit in 16 KB; `target/atarist/build.sh` enforces this against `BOOT.BIN` and aborts if exceeded. The 16 KB matches `CART_CARTRIDGE_CODE_SIZE` in `rp/src/include/cart_shared.h` and `CARTRIDGE_CODE_SIZE` in `target/atarist/src/inc/sidecart_layout.s`.
 - After a change in `target/atarist/`, rebuild the m68k image (`./build.sh`, or `(cd target/atarist && ./build.sh "$PWD" release 0)`): it regenerates `rp/src/include/target_firmware.h`, which `tools/dev/flash.sh` does not.
 - FatFs configuration lives at `rp/src/ff/ffconf.h`. `rp/src/CMakeLists.txt` puts that directory ahead of the `fatfs-sdk` include path with `target_include_directories(... BEFORE PRIVATE)`, so the override wins and the submodule stays clean. Do not edit the submodule's copy.
