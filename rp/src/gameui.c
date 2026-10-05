@@ -346,7 +346,9 @@ static void overlay(uint32_t frame, uint8_t bright) {
   }
   if (time_us_32() - s_ui.scene_t0 < BANNER_US) {
     char line[41];
-    if (s_ui.options & GAMEUI_OPT_INFINITE || s_ui.game.infinite) {
+    if (s_ui.game.options.watch) {
+      snprintf(line, sizeof(line), "WATCH MODE   ANY KEY: MENU");
+    } else if (s_ui.options & GAMEUI_OPT_INFINITE || s_ui.game.infinite) {
       snprintf(line, sizeof(line), "SCORE %06lu   LIVES -",
                (unsigned long)s_ui.game.score);
     } else {
@@ -883,7 +885,7 @@ static void draw_pause(void) {
   } else {
     textf(12, 13, C_TEXT, "LIVES  %u", (unsigned)s_ui.game.lives);
   }
-  centred(20, C_DIM, "P: GO ON");
+  centred(20, C_DIM, "P: GO ON   Q: QUIT");
 }
 
 static void draw_continue(void) {
@@ -993,7 +995,9 @@ static void read_stick(void) {
   s_ui.stick = joy.state;
   s_ui.stick_pressed = joy.pressed;
   if (s_ui.mode == MODE_PLAY || s_ui.mode == MODE_ATTRACT) {
-    if (s_ui.mode == MODE_ATTRACT && (joy.pressed & IKBD_JOY_FIRE)) {
+    // Fire starts a game from the movie, and leaves one in watch mode.
+    if ((s_ui.mode == MODE_ATTRACT || s_ui.game.options.watch) &&
+        (joy.pressed & IKBD_JOY_FIRE)) {
       press(0x1C);
     }
     return;
@@ -1158,7 +1162,9 @@ static void press(uint8_t sc) {
       break;
     }
     case MODE_PLAY:
-      if (sc == 0x19) {  // P: pause
+      if (s_ui.game.options.watch) {
+        enter_mode(MODE_MENU);  // watch mode: any key, back to the menu
+      } else if (sc == 0x19) {  // P: pause
         s_ui.paused_ms = clip_ms();
         s_ui.paused_frame = player_frame_shown();
         enter_mode(MODE_PAUSE);
@@ -1169,7 +1175,9 @@ static void press(uint8_t sc) {
       }
       break;
     case MODE_PAUSE:
-      if (sc == 0x19) {  // P: on again, from the frame shown
+      if (sc == 0x10) {  // Q: the game left, back to the menu
+        enter_mode(MODE_MENU);
+      } else if (sc == 0x19) {  // P: on again, from the frame shown
         s_ui.mode = MODE_PLAY;
         if (s_ui.held || s_ui.ended) {
           // A picture held, or the clip's last after its end: that picture
