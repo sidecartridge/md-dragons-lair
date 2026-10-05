@@ -1110,6 +1110,10 @@ static void press(uint8_t sc) {
         enter_mode(MODE_MENU);
       } else if (sc == 0x14) {  // T
         enter_mode(MODE_SCORES);
+      } else if (sc == 0x16) {  // U: the volume, as in a game
+        player_volume(+1);
+      } else if (sc == 0x20) {  // D
+        player_volume(-1);
       }
       break;
     case MODE_MENU:
