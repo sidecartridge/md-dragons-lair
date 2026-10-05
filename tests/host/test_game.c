@@ -268,6 +268,42 @@ static void check_hint_open(void) {
   CHECK(checked > 0);
 }
 
+// A diagonal never kills: its two directions pressed inside a window where
+// the diagonal leads to a death do not take that move.
+static void check_diagonal_never_kills(void) {
+  static const uint8_t dirs[4][2] = {{GAME_IN_UP, GAME_IN_LEFT},
+                                     {GAME_IN_UP, GAME_IN_RIGHT},
+                                     {GAME_IN_DOWN, GAME_IN_LEFT},
+                                     {GAME_IN_DOWN, GAME_IN_RIGHT}};
+  int checked = 0;
+  for (uint16_t q = 0; q < game_sequence_count; q++) {
+    const game_sequence_t *seq = &game_sequences[q];
+    for (uint16_t i = 0; i < seq->action_count; i++) {
+      uint16_t a = (uint16_t)(seq->first_action + i);
+      const game_action_t *act = &game_actions[a];
+      if (act->input < GAME_IN_UPLEFT || act->input > GAME_IN_DOWNRIGHT ||
+          act->next == GAME_SEQ_NONE ||
+          !(game_sequences[act->next].flags & GAME_SEQ_KILLS)) {
+        continue;
+      }
+      game_t g;
+      game_options_t o = options();
+      game_init(&g, &o);
+      g.playing = true;
+      g.sequence = q;
+      g.accepted = GAME_SEQ_NONE;
+      g.offset_ms = 0;
+      g.start_pending = false;
+      const uint8_t *d = dirs[act->input - GAME_IN_UPLEFT];
+      game_out_t out;
+      game_tick(&g, act->from_ms, GAME_BIT(d[0]) | GAME_BIT(d[1]), 1, &out);
+      CHECK(out.taken != a);
+      checked++;
+    }
+  }
+  CHECK(checked > 0);  // the table has some
+}
+
 // A diagonal pressed: a window open for both a diagonal and one of its
 // directions takes the diagonal's move.
 static void check_diagonal(void) {
@@ -310,6 +346,7 @@ int main(void) {
   check_infinite();
   check_start_scene();
   check_hint_open();
+  check_diagonal_never_kills();
   check_diagonal();
   TEST_END();
 }

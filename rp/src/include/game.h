@@ -14,6 +14,9 @@
  * lair) or a fixed one; lives, the score, game over and a continue.
  *
  * Beside DirkSimple: the diagonals count (a stick's, or two arrow keys),
+ * only to pass (DirkSimple's front end never reports one, so its few
+ * windows where a diagonal kills never fire; a stick going through one
+ * must not kill),
  * the options (infinite lives, starting lives, watch mode, the order, a
  * scene to start from, continue) and the hint (the move that passes). Plain
  * C, no SDK, no allocation: the host tests play it.

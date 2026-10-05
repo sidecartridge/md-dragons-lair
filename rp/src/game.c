@@ -229,6 +229,9 @@ static void check_actions(game_t *g, uint32_t pressed, game_out_t *out) {
       if (pass == 0 && !diagonal && (pressed & DIAGONALS)) {
         continue;  // a diagonal pressed: its own moves first
       }
+      if (diagonal && kills(act->next)) {
+        continue;  // a diagonal only passes: DirkSimple never reports one
+      }
       if (g->options.watch && g->playing && act->next != GAME_SEQ_NONE &&
           !kills(act->next)) {
         g->accepted = a;
