@@ -89,7 +89,7 @@ fi
 export PICO_SDK_PATH="$REPO/pico-sdk" PICO_EXTRAS_PATH="$REPO/pico-extras" \
        FATFS_SDK_PATH="$REPO/fatfs-sdk"
 export BOARD_TYPE=pico_w PICO_BOARD=pico_w
-export APP_UUID_KEY="${APP_UUID_KEY:-7c5f4899-ce5f-4ee2-92c1-3700d2d55594}"
+export APP_UUID_KEY="${APP_UUID_KEY:-44444444-4444-4444-8444-444444444444}"
 RELEASE_VERSION="$(tr -d '\r\n ' < "$REPO/version.txt")"
 export RELEASE_VERSION RELEASE_TYPE="${RELEASE_TYPE:-}" DEBUG_MODE
 if [ -z "${RELEASE_DATE:-}" ]; then
