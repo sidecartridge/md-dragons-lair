@@ -176,6 +176,10 @@ runs the command defined as `DEVHOOKS_APP_<NAME>` in `rp/src/include`; the bench
   and motion compensation timed too; no word: back).
 - `sound N [1]`: scene clip N's sound decoded and timed (1: played; no word: stopped).
 - `write_test`: the card's write rate (a 2 MB scratch file in the folder, deleted after).
+- `game`: the game, or back to the bench from it.
+- `game_bot MS [1]`: a game played by a bot through the IKBD decoder, each move pressed MS into its
+  window on the keyboard (1: the stick in port 1), with infinite lives; every press, death and the
+  game's summary on the console (no word: stopped).
 
 The SD card starts before the main loop: after a flash, wait for the console's `Root:` line before
 sending one.
