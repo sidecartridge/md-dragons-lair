@@ -24,6 +24,7 @@
 #define GAMEUI_OPT_WATCH 0x08u     // the game plays itself
 #define GAMEUI_OPT_CONTINUE 0x10u  // a continue after game over
 #define GAMEUI_OPT_SOUNDS 0x20u    // the input sounds
+#define GAMEUI_OPT_ARCADE 0x40u    // the arcade's timing: no grace
 
 // The bench's part: the clip file of `clip` ("S05D2") in the set the game
 // plays, and the card at its fast speed or its own.

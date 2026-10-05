@@ -30,13 +30,52 @@ static bool kills(uint16_t seq) {
 
 // --- Sequences and scenes ------------------------------------------------------
 
+// A move that passes: it leads on, not to a death.
+static bool passes(const game_action_t *act) {
+  return act->next != GAME_SEQ_NONE && !kills(act->next);
+}
+
+// Where a move's window ends for good: its end, or its sequence's (the
+// earlier: a timeout ends the window), plus the grace.
+static uint32_t grace_end(const game_t *g, const game_sequence_t *s,
+                          const game_action_t *act) {
+  uint32_t end = act->to_ms < s->timeout_ms ? act->to_ms : s->timeout_ms;
+  return end + g->options.grace_ms;
+}
+
+// The sequence's end: its timeout, or later while a move that passes is
+// in its grace (none taken yet).
+static uint32_t timeout_of(const game_t *g, const game_sequence_t *s) {
+  uint32_t t = s->timeout_ms;
+  if (g->options.grace_ms == 0 || t == 0 || !g->playing ||
+      g->accepted != GAME_SEQ_NONE) {
+    return t;
+  }
+  uint32_t end = t;
+  for (uint16_t i = 0; i < s->action_count; i++) {
+    const game_action_t *act = &game_actions[s->first_action + i];
+    if (passes(act) && grace_end(g, s, act) > end) {
+      end = grace_end(g, s, act);
+    }
+  }
+  return end;
+}
+
 static void start_sequence(game_t *g, uint16_t seq, game_out_t *out) {
   const game_sequence_t *s = &game_sequences[seq];
+  const game_sequence_t *before = &game_sequences[g->sequence];
   g->sequence = seq;
   g->accepted = GAME_SEQ_NONE;
   if (s->clip == GAME_CLIP_NONE && (s->flags & GAME_SEQ_NOT_ON_CD) == 0) {
-    // No seek: the clip plays on, the sequence's time from here.
-    g->offset_ms += g->sequence_ms;
+    // No seek: the clip plays on, the sequence's time from here: where the
+    // one before ended, at its timeout at most (a grace past it is not the
+    // clip's, and the sequences after keep their place).
+    uint32_t ran = g->sequence_ms;
+    if (g->options.grace_ms > 0 && before->timeout_ms > 0 &&
+        ran > before->timeout_ms) {
+      ran = before->timeout_ms;
+    }
+    g->offset_ms += ran;
   } else {
     // A seek: the player starts the clip; its time starts at 0.
     out->seek = (s->flags & GAME_SEQ_SINGLE_FRAME) == 0;
@@ -251,6 +290,22 @@ static void check_actions(game_t *g, uint32_t pressed, game_out_t *out) {
       break;
     }
   }
+  // The grace: a move that passes, pressed just after its window, when no
+  // window of its input is open (one was, it was taken above).
+  if (g->options.grace_ms > 0 && g->playing) {
+    for (uint16_t i = 0; i < s->action_count; i++) {
+      uint16_t a = (uint16_t)(s->first_action + i);
+      const game_action_t *act = &game_actions[a];
+      if (passes(act) && (pressed & GAME_BIT(act->input)) &&
+          g->sequence_ms > act->from_ms &&
+          g->sequence_ms <= grace_end(g, s, act)) {
+        g->accepted = a;
+        out->taken = a;
+        out->sounds |= GAME_SOUND_ACCEPT;
+        return;
+      }
+    }
+  }
   if ((pressed & MOVES) && g->playing) {
     out->sounds |= GAME_SOUND_REJECT;
   }
@@ -263,7 +318,7 @@ static void check_timeout(game_t *g, uint32_t held, game_out_t *out) {
     const game_sequence_t *s = seq_of(g);
     const game_action_t *acc =
         g->accepted != GAME_SEQ_NONE ? &game_actions[g->accepted] : NULL;
-    bool done = g->sequence_ms >= s->timeout_ms;
+    bool done = g->sequence_ms >= timeout_of(g, s);
     if (!done && acc != NULL) {
       done = acc->interrupt != GAME_INT_NONE ||
              (acc->next != GAME_SEQ_NONE &&

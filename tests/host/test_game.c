@@ -268,6 +268,77 @@ static void check_hint_open(void) {
   CHECK(checked > 0);
 }
 
+// The grace: a move that passes, pressed 100 ms after its window when no
+// window of its input is open then, passes with a grace of 250 ms and not
+// without; pressed in a window of its input that kills, it kills.
+static void check_grace(void) {
+  int passed = 0, killed = 0;
+  for (uint16_t q = 0; q < game_sequence_count; q++) {
+    const game_sequence_t *seq = &game_sequences[q];
+    if (seq->timeout_ms == 0) {
+      continue;
+    }
+    for (uint16_t i = 0; i < seq->action_count; i++) {
+      uint16_t a = (uint16_t)(seq->first_action + i);
+      const game_action_t *act = &game_actions[a];
+      if (act->next == GAME_SEQ_NONE ||
+          (game_sequences[act->next].flags & GAME_SEQ_KILLS) ||
+          act->input > GAME_IN_ACTION) {
+        continue;
+      }
+      uint32_t end = act->to_ms < seq->timeout_ms ? act->to_ms : seq->timeout_ms;
+      uint32_t t = end + 100u;
+      // The window of its input open at t, if any.
+      const game_action_t *open = NULL;
+      for (uint16_t j = 0; j < seq->action_count; j++) {
+        const game_action_t *o = &game_actions[seq->first_action + j];
+        if (o->input == act->input && o->from_ms <= t && t <= o->to_ms) {
+          open = o;
+        }
+      }
+      for (int grace = 0; grace <= 1; grace++) {
+        game_t g;
+        game_options_t o = options();
+        o.grace_ms = grace ? 250u : 0u;
+        game_init(&g, &o);
+        g.playing = true;
+        g.sequence = q;
+        g.accepted = GAME_SEQ_NONE;
+        g.offset_ms = 0;
+        g.start_pending = false;
+        game_out_t out;
+        game_tick(&g, t, GAME_BIT(act->input), 1, &out);
+        if (open != NULL && (game_sequences[open->next].flags & GAME_SEQ_KILLS)) {
+          CHECK(out.taken != a);  // the death's window wins
+          killed += grace;
+        } else if (open == NULL && t <= seq->timeout_ms + 250u) {
+          CHECK(grace ? out.taken == a : out.taken != a);
+          passed += grace;
+        }
+      }
+    }
+  }
+  CHECK(passed > 0);
+  CHECK(killed > 0);
+  // A game with the grace: followed by the hints it is won, idle it is lost.
+  sim_t s;
+  game_options_t o = options();
+  o.fixed_order = true;
+  o.grace_ms = 250u;
+  sim_init(&s, &o);
+  sim_start(&s, 0);
+  sim_play(&s, follow_hint, GAME_TICKS);
+  CHECK(s.over && s.won);
+  CHECK_EQ(s.lives_lost, 0);
+  sim_t idle;
+  sim_init(&idle, &o);
+  sim_start(&idle, 0);
+  sim_play(&idle, NULL, GAME_TICKS);
+  CHECK(idle.over && !idle.won);
+  CHECK_EQ(idle.lives_lost, 5);
+  printf("grace: %d late presses passed, %d deaths kept\n", passed, killed);
+}
+
 // A diagonal never kills: its two directions pressed inside a window where
 // the diagonal leads to a death do not take that move.
 static void check_diagonal_never_kills(void) {
@@ -347,6 +418,7 @@ int main(void) {
   check_start_scene();
   check_hint_open();
   check_diagonal_never_kills();
+  check_grace();
   check_diagonal();
   TEST_END();
 }

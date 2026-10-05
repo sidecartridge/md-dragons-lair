@@ -57,6 +57,10 @@ static const uint16_t gameui_palette[16] = {
 // pressed does not pass them by.
 #define SETTLE_US 1000000u
 #define SOUND_GAP_US 200000u        // between two input sounds (DirkSimple's)
+// The relaxed timing: a move pressed this long after its window still
+// passes (DirkSimple's windows are the arcade's, a little tighter than the
+// PC version on the CD gives on the same video).
+#define GRACE_MS 250u
 #define HISCORES 10
 #define HISCORE_LEN 10              // "DRK0300000"
 #define PICK_ROWS 20                // the picker's lines on the screen
@@ -480,6 +484,7 @@ static game_options_t options_for_game(void) {
   o.watch = (s_ui.options & GAMEUI_OPT_WATCH) != 0;
   o.fixed_order = (s_ui.options & GAMEUI_OPT_FIXED) != 0;
   o.start_scene = s_ui.start_scene;
+  o.grace_ms = (s_ui.options & GAMEUI_OPT_ARCADE) ? 0u : GRACE_MS;
 #ifdef GAMEUI_TRACE
   if (s_bot.on) {
     o.infinite_lives = true;  // a death is reported, and the bot goes on
@@ -556,9 +561,11 @@ static void trace(uint16_t scene, uint16_t seq, uint32_t ms, uint32_t pressed,
   if (out->taken != GAME_SEQ_NONE) {
     const game_action_t *a = &game_actions[out->taken];
     s_trace.moves++;
-    DPRINTF("Move %s taken in %s.%s at %lu ms, window %lu-%lu%s\n",
+    uint32_t end = a->to_ms < s->timeout_ms ? a->to_ms : s->timeout_ms;
+    DPRINTF("Move %s taken in %s.%s at %lu ms, window %lu-%lu%s%s\n",
             input_names[a->input], where, sname, (unsigned long)ms,
             (unsigned long)a->from_ms, (unsigned long)a->to_ms,
+            ms > end ? " (in the grace)" : "",
             leads_to_death(a) ? ": a death" : "");
   } else {
     for (int in = 0; in < GAME_INPUTS; in++) {
@@ -819,6 +826,8 @@ static void draw_menu(void) {
   textf(3, r++, C_TEXT, "W  WATCH MODE               %5s", on_off(GAMEUI_OPT_WATCH));
   textf(3, r++, C_TEXT, "C  CONTINUE                 %5s", on_off(GAMEUI_OPT_CONTINUE));
   textf(3, r++, C_TEXT, "S  INPUT SOUNDS             %5s", on_off(GAMEUI_OPT_SOUNDS));
+  textf(3, r++, C_TEXT, "A  TIMING                 %7s",
+        (s_ui.options & GAMEUI_OPT_ARCADE) ? "ARCADE" : "RELAXED");
   text(3, r++, C_TEXT, "P  START AT");
   text(6, r++, C_VALUE, s_ui.start_scene == GAME_SCENE_NONE
                             ? "THE START"
@@ -1125,6 +1134,7 @@ static void press(uint8_t sc) {
         case 0x11: toggle(GAMEUI_OPT_WATCH); break;     // W
         case 0x2E: toggle(GAMEUI_OPT_CONTINUE); break;  // C
         case 0x1F: toggle(GAMEUI_OPT_SOUNDS); break;    // S
+        case 0x1E: toggle(GAMEUI_OPT_ARCADE); break;    // A
         case 0x26:                                      // L
           s_ui.lives = (uint8_t)(s_ui.lives % 5 + 1);
           settings_store();
