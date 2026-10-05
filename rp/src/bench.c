@@ -58,6 +58,14 @@ static const uint32_t bench_chunk_bytes[BENCH_CHUNKS] = {512u, 2048u, 8192u,
 #define BENCH_SPEEDS 2
 #define BENCH_PASSES (BENCH_SPEEDS * BENCH_CHUNKS + 1)  // the last: CRC
 
+// The bench's tools (the listing, the tests, the players) in debug builds
+// only: a release build's bench screen is the card's state and what to do.
+#if defined(_DEBUG) && (_DEBUG != 0)
+#define BENCH_TOOLS 1
+#else
+#define BENCH_TOOLS 0
+#endif
+
 // Screen: 40 x 25 characters of the 8x8 font.
 #define COLS 40
 #define LIST_ROW 10
@@ -589,7 +597,8 @@ static void bench_draw(void) {
   }
   fb_chunked_clear(C_BACK);
   font_set_font(&font8x8);
-  text(0, 0, C_TITLE, "DRAGON'S LAIR  SD + ISO BENCH");
+  text(0, 0, C_TITLE,
+       BENCH_TOOLS ? "DRAGON'S LAIR  SD + ISO BENCH" : "DRAGON'S LAIR");
   text(31, 0, C_DIM, RELEASE_VERSION);
   rule(1);
 
@@ -597,6 +606,10 @@ static void bench_draw(void) {
     text(0, 2, C_BAD, "CANNOT CREATE THE FOLDER " BENCH_FOLDER);
   } else if (!benchResults.sd_ok) {
     text(0, 2, C_BAD, "NO SD CARD");
+    if (!BENCH_TOOLS) {
+      text(0, 5, C_TEXT, "PUT A CARD IN THE MULTI-DEVICE AND");
+      text(0, 6, C_TEXT, "SWITCH THE ST OFF AND ON");
+    }
   } else {
     textf(0, 2, C_TEXT, "CARD    MOUNTED, SPI %lu KHZ",
           (unsigned long)(s_configured_hz / 1000u));
@@ -614,7 +627,9 @@ static void bench_draw(void) {
       textf(0, 8, C_GOOD, "SET     %s, %lu CLIPS, COMPLETE",
             s_set.gun_bits == 4 ? "STE" : "ST",
             (unsigned long)benchResults.clips);
-      text(8, 9, C_TEXT, "V: THE CLIPS");
+      if (BENCH_TOOLS) {
+        text(8, 9, C_TEXT, "V: THE CLIPS");
+      }
     } else if (s_set.checked) {
       text(0, 8, C_BAD, "NO COMPLETE SET OF CLIPS EITHER");
     }
@@ -635,13 +650,22 @@ static void bench_draw(void) {
           (unsigned long)benchResults.clips);
     textf(8, 8, C_TEXT, "%llu BYTES OF CLIPS",
           (unsigned long long)benchResults.clip_bytes);
-    rule(9);
-    draw_listing();
-    rule(18);
-    draw_results();
+    if (BENCH_TOOLS) {
+      rule(9);
+      draw_listing();
+      rule(18);
+      draw_results();
+    } else {
+      text(0, 11, C_BAD, "SOME CLIPS ARE NOT CONVERTED YET");
+      text(0, 13, C_TEXT, "C CONVERTS THEM, OR THE NEXT START DOES");
+    }
   }
   rule(23);
-  if (!draw_sound_line(24)) {
+  if (!BENCH_TOOLS) {
+    text(0, 24, C_DIM,
+         benchResults.image_found ? "C CONVERT  X BOOSTER  ESC GEM"
+                                  : "X BOOSTER  ESC GEM");
+  } else if (!draw_sound_line(24)) {
     text(0, 24, C_DIM,
          benchResults.image_found ? "R READ I/P PICTS A SND X BOOSTER ESC GEM"
          : s_set.ready            ? "V CLIPS  X BOOSTER  ESC GEM"
@@ -3124,7 +3148,8 @@ void bench_start_sd(void) {
 //
 // The game (gameui.h) starts once the machine's clips are there: at an ST's
 // start after the clips' check (with the image, every clip current; without
-// it, a complete set), or on G. B in its menu comes back to the bench.
+// it, a complete set), or on G. B in its menu comes back to the bench, in
+// debug builds.
 
 static void game_clip_path(char *out, unsigned size, const char *clip) {
   int bits = benchResults.image_found ? conv_machine_bits() : s_set.gun_bits;
@@ -3290,6 +3315,10 @@ void bench_handle_key(const ikbd_key_event_t *key) {
       default:
         break;
     }
+    return;
+  }
+  // A release build has no tools: C converts the clips missing, X Booster.
+  if (!BENCH_TOOLS && key->scancode != 0x2E && key->scancode != 0x2D) {
     return;
   }
   uint32_t entries = benchResults.entries;

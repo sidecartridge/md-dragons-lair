@@ -1,0 +1,79 @@
+name: Web converter
+
+# The web converter's page on GitHub Pages, at md-dragons-lair.sidecartridge.com
+# (the gh-pages branch). Each converter version (CONVERT_VERSION) has its own
+# folder, /v<N>/, which the cartridge's QR code opens; the folders of the other
+# versions stay, so a cartridge of an older release still finds the converter
+# its clips need. The root sends to the newest version, with its query string
+# (?set=st|ste|both).
+on:
+  push:
+    branches: [main, 'release/**']
+    paths:
+      - 'web/**'
+      - 'rp/src/**'
+      - '.github/workflows/pages.yml'
+
+permissions:
+  contents: write
+
+# One publication at a time; a later push waits for the one before.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the code
+      uses: actions/checkout@v4
+
+    # The page and the converter in WebAssembly (Emscripten pinned there); the
+    # converter's test must give the native build's CRC-32 before it is published.
+    - name: The web converter and its test
+      run: web/build.sh test
+
+    - name: Publish into gh-pages, beside the other versions
+      env:
+        DOMAIN: md-dragons-lair.sidecartridge.com
+      run: |
+        set -euo pipefail
+        n=$(sed -n 's/^#define CONVERT_VERSION \([0-9][0-9]*\).*/\1/p' rp/src/include/convert.h)
+        test -n "$n"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        if git fetch -q origin gh-pages; then
+          git worktree add -q pages origin/gh-pages
+          git -C pages checkout -q -B gh-pages
+        else
+          git worktree add -q --detach pages
+          git -C pages checkout -q --orphan gh-pages
+          git -C pages rm -rfq .
+        fi
+        rm -rf "pages/v$n"
+        mkdir -p "pages/v$n"
+        cp -R web/dist/site/. "pages/v$n/"
+        newest=$(ls -d pages/v[0-9]* | sed 's|pages/v||' | sort -n | tail -1)
+        cat > pages/index.html <<EOF
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+          <meta charset="UTF-8">
+          <title>Dragon's Lair: prepare the SD card</title>
+          <meta http-equiv="refresh" content="0; url=v$newest/">
+          <script>location.replace('v$newest/' + location.search);</script>
+        </head>
+        <body><p><a href="v$newest/">The web converter</a></p></body>
+        </html>
+        EOF
+        echo "$DOMAIN" > pages/CNAME
+        touch pages/.nojekyll
+        git -C pages add -A
+        if git -C pages diff --cached --quiet; then
+          echo "Nothing changed"
+        else
+          git -C pages commit -q -m "The web converter, version $n, from ${GITHUB_SHA::7}"
+          git -C pages push -q origin gh-pages
+        fi
+        echo "Published v$n (newest v$newest) at https://$DOMAIN/v$n/" >> "$GITHUB_STEP_SUMMARY"
