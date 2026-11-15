@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.0.1 (unreleased)
+
+- **Built with version 1.5.0 of the Atari ST toolkit**
+  ([atarist-toolkit-docker](https://github.com/sidecartridge/atarist-toolkit-docker)), the
+  toolchain that compiles the part of the app that runs on the Atari. Nothing changes in how the
+  app looks or plays.
+
+---
+
 ## v1.0.0 (2026-10-05)
 
 **Dragon's Lair comes to the Atari ST.** The 1983 laserdisc game, Don Bluth's cartoon and all, on
